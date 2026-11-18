@@ -3,14 +3,26 @@ set -eu
 wake_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 runtime=${1:-"$wake_dir/.build/current"}
 app=${CODEX_WAKE_APP:-/Applications/ChatGPT.app}
-node=$(command -v node)
+node=$(command -v node || true)
+if [ -z "$node" ]; then
+    printf '%s\n' 'Install Node.js and make node available in PATH before launching Desktop.' >&2
+    exit 1
+fi
 if [ ! -x "$runtime/codex" ] || [ ! -x "$runtime/BackgroundMenu" ]; then
     printf 'Build the runtime with %s/build.sh first.\n' "$wake_dir" >&2
     exit 1
 fi
 runtime=$(CDPATH= cd -- "$runtime" && pwd)
-if [ "$("$app/Contents/Resources/codex-cli/bin/codex" --version)" != "$(cat "$runtime/version")" ]; then
-    printf '%s\n' 'Build against the CLI version bundled with the updated Desktop app first.' >&2
+app_cli="$app/Contents/Resources/codex-cli/bin/codex"
+if [ ! -x "$app_cli" ]; then
+    printf 'ChatGPT Desktop was not found at %s.\n' "$app" >&2
+    exit 1
+fi
+bundled_version=$("$app_cli" --version)
+runtime_version=$(cat "$runtime/version")
+if [ "$bundled_version" != "$runtime_version" ]; then
+    printf 'Desktop bundles %s. This archive requires %s.\n' "$bundled_version" "$runtime_version" >&2
+    printf '%s\n' 'Use ./codex in the terminal, or build a matching runtime for Desktop.' >&2
     exit 1
 fi
 if /usr/bin/pgrep -x ChatGPT >/dev/null; then
