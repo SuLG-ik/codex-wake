@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+if [ "${1:-}" = app-server ] && [ -n "${CODEX_WAKE_SOCKET:-}" ]; then
+    wake_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    exec "$CODEX_WAKE_NODE" "$wake_dir/bridge.mjs" relay "$CODEX_WAKE_SOCKET" "$CODEX_WAKE_BINARY" "$@"
+fi
+exec "$CODEX_WAKE_BINARY" "$@"
