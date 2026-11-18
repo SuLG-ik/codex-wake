@@ -64,8 +64,16 @@ pub(crate) fn terminal_session_for_input(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OnCommandExit {
+    Wake,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
     pub(crate) cmd: String,
+    #[serde(default)]
+    on_exit: Option<OnCommandExit>,
     #[serde(default)]
     shell: Option<String>,
     #[serde(default)]

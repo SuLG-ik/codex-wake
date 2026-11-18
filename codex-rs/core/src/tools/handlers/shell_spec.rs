@@ -53,6 +53,13 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
             JsonSchema::number(Some(yield_time_ms_description.to_string())),
         ),
         (
+            "on_exit".to_string(),
+            JsonSchema::string(Some(
+                "Set to \"wake\" to run a long command in the background and suspend model work until its result arrives. Use this when further work depends on the command finishing. The runtime will report the exit code and output without write_stdin polling."
+                    .to_string(),
+            )),
+        ),
+        (
             "max_output_tokens".to_string(),
             JsonSchema::number(Some(
                 "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.".to_string(),
@@ -119,6 +126,13 @@ pub fn create_write_stdin_tool() -> ToolSpec {
             "chars".to_string(),
             JsonSchema::string(Some(
                 "Bytes to write to stdin. Defaults to empty, which polls without writing.".to_string(),
+            )),
+        ),
+        (
+            "on_exit".to_string(),
+            JsonSchema::string(Some(
+                "Set to \"wake\" with empty chars to suspend model work until this existing session exits. The runtime will deliver the result without polling."
+                    .to_string(),
             )),
         ),
         (

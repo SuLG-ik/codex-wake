@@ -94,6 +94,7 @@ pub async fn inter_agent_communication(
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn
         || sess.features.enabled(Feature::WakeOnAgentMessages)
+        || sess.has_background_agent_mail_wait()
         || sess.has_outstanding_durable_sleep()
     {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
@@ -521,6 +522,7 @@ pub(super) async fn submission_loop(
                     Ok(true) => {
                         sess.input_queue.notify_mailbox();
                         if sess.features.enabled(Feature::WakeOnAgentMessages)
+                            || sess.has_background_agent_mail_wait()
                             || sess.has_outstanding_durable_sleep()
                         {
                             sess.maybe_start_turn_for_pending_work().await;

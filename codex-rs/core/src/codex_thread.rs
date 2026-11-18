@@ -969,6 +969,27 @@ impl CodexThread {
         self.session.list_background_terminals().await
     }
 
+    pub async fn has_background_jobs(&self) -> bool {
+        self.session
+            .services
+            .unified_exec_manager
+            .has_background_jobs()
+            .await
+            || self.session.has_background_results().await
+            || self.session.has_background_agent_mail_wait()
+    }
+
+    pub async fn move_terminal_to_background(
+        &self,
+        process_id: i32,
+        item_id: &str,
+        turn_id: &str,
+    ) -> bool {
+        self.session
+            .move_terminal_to_background(process_id, item_id, turn_id)
+            .await
+    }
+
     pub async fn terminate_background_terminal(&self, process_id: i32) -> bool {
         self.session.terminate_background_terminal(process_id).await
     }

@@ -1,4 +1,5 @@
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -19,12 +20,15 @@ use codex_tools::ToolSpec;
 use serde::Deserialize;
 
 use super::super::shell_spec::create_write_stdin_tool;
+use super::OnCommandExit;
 use super::post_unified_exec_tool_use_payload;
 
 #[derive(Debug, Deserialize)]
 struct WriteStdinArgs {
     #[serde(default)]
     chars: String,
+    #[serde(default)]
+    on_exit: Option<OnCommandExit>,
     #[serde(default = "super::default_write_stdin_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -87,6 +91,26 @@ impl WriteStdinHandler {
             ));
         };
         let args = WriteStdinArgs::parse(&payload)?;
+        if args.on_exit.is_some() {
+            if !args.chars.is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "on_exit requires empty chars".to_string(),
+                ));
+            }
+            if session
+                .services
+                .unified_exec_manager
+                .background_terminal_from_tool(&terminal, &turn)
+            {
+                return Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                    format!(
+                        "Waiting for command session {} to exit. The result will arrive automatically.",
+                        terminal.process_id
+                    ),
+                    Some(true),
+                )));
+            }
+        }
         let context =
             UnifiedExecContext::new(session.clone(), step_context, cancellation_token, call_id);
         let response = session

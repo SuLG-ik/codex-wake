@@ -864,6 +864,7 @@ mod tests {
             yield_time_ms: 10_000,
             max_output_tokens: None,
             completion_timeout: None,
+            wake_on_exit: false,
         }
     }
 

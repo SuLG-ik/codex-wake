@@ -57,6 +57,7 @@ pub(crate) struct PreparedExecCommand {
     pub(crate) yield_time_ms: u64,
     pub(crate) max_output_tokens: Option<usize>,
     pub(crate) completion_timeout: Option<Duration>,
+    pub(crate) wake_on_exit: bool,
 }
 
 impl PreparedExecCommand {
@@ -308,6 +309,7 @@ impl<'a> ParsedExecCommand<'a> {
             yield_time_ms: args.yield_time_ms,
             max_output_tokens: args.max_output_tokens,
             completion_timeout,
+            wake_on_exit: args.on_exit.is_some(),
             cwd,
             tty: args.tty,
             permissions,

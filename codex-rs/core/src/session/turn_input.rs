@@ -820,6 +820,7 @@ impl Session {
         let has_trigger_turn = self.input_queue.has_trigger_turn_mailbox_items().await;
         if !has_trigger_turn
             && !self.has_outstanding_durable_sleep()
+            && !self.can_wake_for_background_results().await
             && !self.should_wake_on_agent_messages().await
         {
             return None;
@@ -872,13 +873,24 @@ impl Session {
     }
 
     async fn should_wake_on_agent_messages(&self) -> bool {
-        if !self.features.enabled(Feature::WakeOnAgentMessages)
+        if !(self.features.enabled(Feature::WakeOnAgentMessages)
+            || self.has_background_agent_mail_wait())
             || self.is_interrupted()
             || !self.input_queue.has_pending_mailbox_items().await
         {
             return false;
         }
 
+        let state = self.state.lock().await;
+        let config = &state.session_configuration;
+        !config.session_source.is_non_root_agent()
+            && TurnStartKind::Automatic.permits_mode(config.step_settings.collaboration_mode.mode)
+    }
+
+    async fn can_wake_for_background_results(&self) -> bool {
+        if self.is_interrupted() || !self.has_background_results().await {
+            return false;
+        }
         let state = self.state.lock().await;
         let config = &state.session_configuration;
         !config.session_source.is_non_root_agent()

@@ -541,17 +541,38 @@ pub(crate) async fn run_turn(
     let mut next_step_context = Some(first_step_context);
     let mut guardian_budget_compacted = false;
     loop {
+        let mut background_input = Vec::new();
+        if turn_context
+            .extension_data
+            .remove::<super::background_commands::BackgroundHandoff>()
+            .is_some()
+        {
+            if turn_context.session_source.is_non_root_agent()
+                || turn_context.mode() == codex_protocol::config_types::ModeKind::Plan
+            {
+                background_input = sess
+                    .wait_for_background_result(&turn_context, &cancellation_token)
+                    .await;
+            } else {
+                break;
+            }
+        } else if turn_context.session_source.is_non_root_agent()
+            || turn_context.mode() == codex_protocol::config_types::ModeKind::Plan
+        {
+            background_input = sess.take_background_results().await;
+        }
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = if can_drain_pending_input {
-            sess.input_queue
-                .get_pending_input(&sess.active_turn)
-                .await
-                .0
-        } else {
-            Vec::new()
-        };
+        if can_drain_pending_input {
+            background_input.extend(
+                sess.input_queue
+                    .get_pending_input(&sess.active_turn)
+                    .await
+                    .0,
+            );
+        }
+        let pending_input = background_input;
 
         if run_hooks_and_record_inputs(
             &sess,

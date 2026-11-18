@@ -10,11 +10,14 @@ use tokio::time::Sleep;
 
 use super::SharedPluginMetricsSidecar;
 use super::UnifiedExecContext;
+use super::output::CapturedStream;
 use super::process::OutputBuffers;
 use super::process::OutputHandles;
 use super::process::UnifiedExecProcess;
 use super::take_plugin_metrics_sidecar;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::plugins::metrics::finish_and_track_measurements;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -22,6 +25,8 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
+use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
@@ -29,6 +34,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecOutputStream;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_path_uri::PathUri;
 
 pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
@@ -51,6 +58,12 @@ struct Emitter {
 struct Buffer<const MAX_BYTES: usize = UNIFIED_EXEC_OUTPUT_DELTA_MAX_BYTES> {
     pending: Vec<u8>,
     emitter: Emitter,
+}
+
+pub(super) struct BackgroundHookContext {
+    pub(super) command: String,
+    pub(super) environment_id: String,
+    pub(super) cwd: Option<PathUri>,
 }
 
 /// Spawn a background task that emits ExecCommandOutputDelta events on UTF‑8 boundaries.
@@ -166,11 +179,13 @@ pub(crate) fn spawn_exit_watcher(
     started_at: Instant,
     network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
     plugin_metrics_sidecar: Option<SharedPluginMetricsSidecar>,
+    background_hook: Option<BackgroundHookContext>,
 ) {
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.step_context.turn);
     let model_info = Arc::clone(&context.step_context.settings.model_info);
     let model_context = context.step_context.model_context();
+    let step_context = Arc::clone(&context.step_context);
     let call_id = context.call_id.clone();
     let exit_token = process.cancellation_token();
     let output_drained = process.output_drained_notify();
@@ -188,14 +203,26 @@ pub(crate) fn spawn_exit_watcher(
         let _interaction_guard = interaction_lock.lock_owned().await;
 
         let duration = Instant::now().saturating_duration_since(started_at);
+        let failure = process.failure_message();
+        let exit_code = process.exit_code().unwrap_or(-1);
+        let background_output = if process.claim_background_completion() {
+            let stream = CapturedStream::from(&output_buffer.lock().await.transcript);
+            Some(formatted_truncate_text(
+                &stream.text,
+                TruncationPolicy::Bytes(12_000),
+            ))
+        } else {
+            None
+        };
+        let hook_call_id = background_output.as_ref().map(|_| call_id.clone());
         let plugin_metrics_sidecar = plugin_metrics_sidecar
             .as_ref()
             .and_then(take_plugin_metrics_sidecar);
-        if let Some(message) = process.failure_message() {
+        if let Some(message) = failure.as_ref() {
             drop(plugin_metrics_sidecar);
             emit_failed_exec_end_for_unified_exec(
                 process.sandbox_type(),
-                session_ref,
+                Arc::clone(&session_ref),
                 turn_ref,
                 model_info,
                 call_id,
@@ -205,12 +232,11 @@ pub(crate) fn spawn_exit_watcher(
                 plugin_attribution,
                 output_buffer,
                 String::new(),
-                message,
+                message.clone(),
                 duration,
             )
             .await;
         } else {
-            let exit_code = process.exit_code().unwrap_or(-1);
             let timed_out = process.timed_out();
             finish_and_track_measurements(
                 plugin_metrics_sidecar,
@@ -223,7 +249,7 @@ pub(crate) fn spawn_exit_watcher(
             .await;
             emit_exec_end_for_unified_exec(
                 process.sandbox_type(),
-                session_ref,
+                Arc::clone(&session_ref),
                 turn_ref,
                 model_info,
                 call_id,
@@ -238,6 +264,42 @@ pub(crate) fn spawn_exit_watcher(
                 timed_out,
             )
             .await;
+        }
+        drop(_interaction_guard);
+        if let Some(mut output) = background_output {
+            if let Some(failure) = failure {
+                output = formatted_truncate_text(&failure, TruncationPolicy::Bytes(12_000));
+            } else if let Some((hook, tool_use_id)) = background_hook.zip(hook_call_id) {
+                let outcome = run_post_tool_use_hooks(
+                    &session_ref,
+                    &step_context,
+                    PostToolUsePayload {
+                        tool_cwd: hook.cwd,
+                        tool_name: HookToolName::bash(),
+                        tool_use_id,
+                        tool_input: serde_json::json!({ "command": hook.command }),
+                        tool_response: serde_json::Value::String(output.clone()),
+                    },
+                    &[&hook.environment_id],
+                )
+                .await;
+                record_additional_contexts(
+                    &session_ref,
+                    &step_context.turn,
+                    outcome.additional_contexts,
+                )
+                .await;
+                if outcome.should_block {
+                    output = outcome
+                        .feedback_message
+                        .unwrap_or_else(|| "PostToolUse hook blocked the tool result".to_string());
+                }
+            }
+            session_ref.publish_background_result(format!(
+                "Background command session {process_id} finished after {:.2}s.\nExit code: {exit_code}\nOutput:\n{output}",
+                duration.as_secs_f64(),
+            )).await;
+            process.discard_background_completion();
         }
     });
 }

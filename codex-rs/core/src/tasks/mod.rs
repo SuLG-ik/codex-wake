@@ -528,7 +528,9 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.input_queue.has_pending_mailbox_items().await {
+        if !self.has_background_results().await
+            && !self.input_queue.has_pending_mailbox_items().await
+        {
             return;
         }
 
@@ -541,7 +543,10 @@ impl Session {
             .models_manager
             .refresh_after_auth_change(self.get_config().await.http_client_factory())
             .await;
-        let session_configuration = if self.enabled(Feature::WakeOnAgentMessages) {
+        let session_configuration = if self.enabled(Feature::WakeOnAgentMessages)
+            || self.has_background_results().await
+            || self.has_background_agent_mail_wait()
+        {
             let Some(configuration) = self.pending_work_turn_configuration(&turn_state).await
             else {
                 return;
@@ -559,8 +564,15 @@ impl Session {
             }
             None
         };
-        let (input, mut start_options) =
+        let (mut input, mut start_options) =
             self.input_queue.get_pending_input(&self.active_turn).await;
+        input.extend(self.take_background_results().await);
+        if input
+            .iter()
+            .any(|item| matches!(item, TurnInput::InterAgentCommunication(_)))
+        {
+            self.clear_background_agent_mail_wait();
+        }
         let triggered = input.iter().any(
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
         );
@@ -1040,6 +1052,26 @@ impl Session {
 
     pub(crate) async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
         self.services.unified_exec_manager.list_processes().await
+    }
+
+    pub(crate) async fn move_terminal_to_background(
+        &self,
+        process_id: i32,
+        item_id: &str,
+        turn_id: &str,
+    ) -> bool {
+        let active = self.active_turn.lock().await;
+        let turn = active
+            .as_ref()
+            .and_then(|active| active.task.as_ref())
+            .and_then(|task| {
+                (task.kind == TaskKind::Regular && task.turn_context.sub_id == turn_id)
+                    .then_some(task.turn_context.as_ref())
+            });
+        self.services
+            .unified_exec_manager
+            .background_terminal(process_id, item_id, turn_id, turn)
+            .await
     }
 
     pub(crate) async fn terminate_background_terminal(&self, process_id: i32) -> bool {
