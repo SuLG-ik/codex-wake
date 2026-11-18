@@ -5751,7 +5751,7 @@ async fn background_command_resumes_idle_thread(model_background: bool) -> Resul
         .request(|request_id| ClientRequest::ThreadStart {
             request_id,
             params: ThreadStartParams {
-                cwd: Some(cwd.to_string()),
+                cwd: Some(cwd.as_path().display().to_string()),
                 environments: Some(vec![TurnEnvironmentParams {
                     environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: cwd.into(),
