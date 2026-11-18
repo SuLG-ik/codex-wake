@@ -605,12 +605,9 @@ impl UnifiedExecProcessManager {
             Some(request.process_id.to_string()),
             plugin_attribution.clone(),
         );
-        emitter.emit(event_ctx, ToolEventStage::Begin).await;
-
         // Serialize collection with later polls and final transcript publication.
         let _interaction_guard = process.interaction_lock().lock_owned().await;
         let _foreground = process.foreground_wait(&context.step_context.turn);
-        start_streaming_output(&process, context);
         let start = Instant::now();
         // Persist live sessions and remote output that remains pollable after an early exit.
         let process_stored = (!process.has_exited() && process.exit_code().is_none())
@@ -651,6 +648,10 @@ impl UnifiedExecProcessManager {
                 process.background(Some(&context.step_context.turn));
             }
         }
+
+        // A UI can detach the command as soon as it sees the started event.
+        emitter.emit(event_ctx, ToolEventStage::Begin).await;
+        start_streaming_output(&process, context);
 
         let yield_time_ms = clamp_yield_time(prepared.yield_time_ms);
         // For the initial exec_command call, we both stream output to events
