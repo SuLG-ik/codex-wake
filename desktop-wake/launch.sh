@@ -32,6 +32,7 @@ trap 'exit 143' TERM
 menu_pid=$!
 /usr/bin/open -W -a "$app" \
     --env "CODEX_CLI_PATH=$wake_dir/codex" \
+    --env "CODEX_APP_SERVER_FORCE_CLI=1" \
     --env "CODEX_WAKE_BINARY=$runtime/codex" \
     --env "CODEX_WAKE_NODE=$node" \
     --env "CODEX_WAKE_SOCKET=$session"
