@@ -168,7 +168,7 @@ pub(crate) fn start_streaming_output(process: &UnifiedExecProcess, context: &Uni
 /// Spawn a background watcher that waits for the PTY to exit and then emits a
 /// single ExecCommandEnd event with the aggregated transcript.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_exit_watcher(
+pub(super) fn spawn_exit_watcher(
     process: Arc<UnifiedExecProcess>,
     context: &UnifiedExecContext,
     command: Vec<String>,

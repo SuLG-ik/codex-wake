@@ -1,10 +1,14 @@
 import { spawn } from 'node:child_process'
 import { chmodSync } from 'node:fs'
+import { readdir } from 'node:fs/promises'
 import { createConnection, createServer } from 'node:net'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
 
-const [mode, socketPath, ...args] = process.argv.slice(2)
+const [mode, controlDirectory, ...args] = process.argv.slice(2)
+const requestPrefix = 'desktop-wake-'
+const relaySocketName = /^rpc-\d+$/
 
 function parse(line) {
   try {
@@ -14,26 +18,36 @@ function parse(line) {
   }
 }
 
-function control() {
-  const [action, threadId, turnId, itemId, processId] = args
-  const request = { action, threadId, turnId, itemId, processId }
-  const socket = createConnection(socketPath)
-  socket.setTimeout(6000, () => socket.destroy(new Error('App server did not answer')))
-  socket.on('connect', () => socket.write(JSON.stringify(request) + '\n'))
-  createInterface({ input: socket }).once('line', line => {
-    const result = parse(line)
-    if (result?.error) {
-      console.error(result.error)
-      process.exitCode = 1
-    } else {
-      process.stdout.write(line + '\n')
-    }
-    socket.end()
+function requestRelay(relayName, request) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(join(controlDirectory, relayName))
+    socket.setTimeout(6000, () => socket.destroy(new Error('App server did not answer')))
+    socket.once('error', reject)
+    socket.once('close', () => reject(new Error('App server closed before replying')))
+    socket.once('connect', () => socket.write(JSON.stringify(request) + '\n'))
+    createInterface({ input: socket }).once('line', line => {
+      const result = parse(line)
+      if (!result || result.error) reject(new Error(result?.error ?? 'Malformed app-server reply'))
+      else resolve(result)
+      socket.end()
+    })
   })
-  socket.on('error', error => {
-    console.error(error.message)
-    process.exitCode = 1
-  })
+}
+
+async function control() {
+  const [action, relayName, threadId, turnId, itemId, processId] = args
+  if (action === 'list') {
+    const names = (await readdir(controlDirectory)).filter(name => relaySocketName.test(name))
+    const results = await Promise.allSettled(names.map(async name => {
+      const commands = await requestRelay(name, { action })
+      return commands.map(command => ({ ...command, relay: name }))
+    }))
+    return results.flatMap(result => result.status === 'fulfilled' ? result.value : [])
+  }
+  if (action !== 'detach' || !relaySocketName.test(relayName)) {
+    throw new Error('Unknown control request')
+  }
+  return requestRelay(relayName, { action, threadId, turnId, itemId, processId })
 }
 
 function relay() {
@@ -41,6 +55,7 @@ function relay() {
   const child = spawn(binary, childArgs, { stdio: ['pipe', 'pipe', 'inherit'] })
   const commands = new Map()
   const requests = new Map()
+  const socketPath = join(controlDirectory, `rpc-${process.pid}`)
   const key = ({ threadId, turnId, itemId }) => JSON.stringify([threadId, turnId, itemId])
   const write = message => child.stdin.write(JSON.stringify(message) + '\n')
   child.stdin.on('error', () => {})
@@ -73,6 +88,7 @@ function relay() {
       pending.socket.end(JSON.stringify(answer) + '\n')
       return
     }
+    if (typeof message?.id === 'string' && message.id.startsWith(requestPrefix)) return
 
     const { threadId, turnId, item } = message?.params ?? {}
     if (threadId && turnId && item?.type === 'commandExecution') {
@@ -114,7 +130,7 @@ function relay() {
         socket.end(JSON.stringify({ error: 'Command is no longer available' }) + '\n')
         return
       }
-      const id = 'desktop-wake-' + randomUUID()
+      const id = requestPrefix + randomUUID()
       const { threadId, turnId, itemId, processId } = command
       requests.set(id, { command, socket })
       socket.on('close', () => requests.delete(id))
@@ -138,5 +154,12 @@ function relay() {
 }
 
 if (mode === 'relay') relay()
-else if (mode === 'control') control()
+else if (mode === 'control') {
+  try {
+    process.stdout.write(JSON.stringify(await control()) + '\n')
+  } catch (error) {
+    console.error(error.message)
+    process.exitCode = 1
+  }
+}
 else throw new Error('Expected relay or control')

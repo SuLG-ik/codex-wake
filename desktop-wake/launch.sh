@@ -22,16 +22,16 @@ session=$(mktemp -d /tmp/cxwake.XXXXXX)
 menu_pid=
 cleanup() {
     if [ -n "$menu_pid" ]; then kill "$menu_pid" 2>/dev/null || true; fi
-    rm -f "$session/rpc"
+    rm -f "$session"/rpc-*
     rmdir "$session"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-"$runtime/BackgroundMenu" "$node" "$wake_dir/bridge.mjs" "$session/rpc" "$$" &
+"$runtime/BackgroundMenu" "$node" "$wake_dir/bridge.mjs" "$session" "$$" &
 menu_pid=$!
 /usr/bin/open -W -a "$app" \
     --env "CODEX_CLI_PATH=$wake_dir/codex" \
     --env "CODEX_WAKE_BINARY=$runtime/codex" \
     --env "CODEX_WAKE_NODE=$node" \
-    --env "CODEX_WAKE_SOCKET=$session/rpc"
+    --env "CODEX_WAKE_SOCKET=$session"

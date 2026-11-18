@@ -859,10 +859,12 @@ impl Session {
             return None;
         }
         let has_trigger_turn = self.input_queue.has_trigger_turn_mailbox_items().await;
+        let can_wake_for_background = self.can_wake_for_background_results().await;
         let state = self.state.lock().await;
         let configuration = &state.session_configuration;
         if !has_trigger_turn
             && !self.has_outstanding_durable_sleep()
+            && !can_wake_for_background
             && !TurnStartKind::Automatic
                 .permits_mode(configuration.step_settings.collaboration_mode.mode)
         {
@@ -892,9 +894,10 @@ impl Session {
             return false;
         }
         let state = self.state.lock().await;
-        let config = &state.session_configuration;
-        !config.session_source.is_non_root_agent()
-            && TurnStartKind::Automatic.permits_mode(config.step_settings.collaboration_mode.mode)
+        !state
+            .session_configuration
+            .session_source
+            .is_non_root_agent()
     }
 
     pub(crate) async fn route_realtime_text_input(

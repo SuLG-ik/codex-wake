@@ -15,7 +15,6 @@ const bridge = fileURLToPath(new URL('./bridge.mjs', import.meta.url))
 test('detaches the observed live command and preserves the Desktop stream', { timeout: 12_000 }, async () => {
   // macOS Unix socket paths are limited to 104 bytes.
   const directory = await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'cxwake-test.'))
-  const socket = join(directory, 'rpc')
   const metadata = { threadId: 'thread', turnId: 'turn', itemId: 'call', processId: '21' }
   const { threadId, turnId, itemId, processId } = metadata
   const start = {
@@ -49,35 +48,48 @@ test('detaches the observed live command and preserves the Desktop stream', { ti
       }
     })
   `
-  const relay = spawn(process.execPath, [bridge, 'relay', socket, process.execPath, '-e', fixture], {
+  const relay = spawn(process.execPath, [bridge, 'relay', directory, process.execPath, '-e', fixture], {
     stdio: ['pipe', 'pipe', 'inherit'],
   })
+  const relayName = `rpc-${relay.pid}`
+  const secondRelay = spawn(process.execPath, [bridge, 'relay', directory, process.execPath, '-e', fixture], {
+    stdio: ['pipe', 'pipe', 'inherit'],
+  })
+  const secondRelayName = `rpc-${secondRelay.pid}`
+  const secondClosed = once(secondRelay, 'close')
+  const secondLines = createInterface({ input: secondRelay.stdout })[Symbol.asyncIterator]()
   const closed = once(relay, 'close')
   const lines = createInterface({ input: relay.stdout })[Symbol.asyncIterator]()
   const send = message => relay.stdin.write(JSON.stringify(message) + '\n')
   const next = async () => JSON.parse((await lines.next()).value)
-  const control = async (...args) => JSON.parse((await exec(process.execPath, [bridge, 'control', socket, ...args])).stdout)
+  const control = async (...args) => JSON.parse((await exec(process.execPath, [bridge, 'control', directory, ...args])).stdout)
 
   try {
     send({ method: 'initialize', id: 1, params: { capabilities: {} } })
     assert.deepEqual(await next(), { id: 1, result: { experimental: true } })
-    assert.equal((await stat(socket)).mode & 0o777, 0o600)
+    assert.equal((await stat(join(directory, relayName))).mode & 0o777, 0o600)
     send({ method: 'initialized' })
     assert.deepEqual(await next(), start)
 
-    assert.deepEqual(await control('list'), [{ ...metadata, command: 'sleep 1', cwd: '/tmp', detached: false }])
-    await assert.rejects(control('detach', threadId, 'obsolete', itemId, processId), /no longer available/)
-    await assert.rejects(control('detach', threadId, turnId, itemId, '877'), /no longer available/)
-    assert.deepEqual(await control('detach', threadId, turnId, itemId, processId), { detached: true })
+    assert.deepEqual(await control('list'), [{ ...metadata, relay: relayName, command: 'sleep 1', cwd: '/tmp', detached: false }])
+    await assert.rejects(control('detach', relayName, threadId, 'obsolete', itemId, processId), /no longer available/)
+    await assert.rejects(control('detach', relayName, threadId, turnId, itemId, '877'), /no longer available/)
+    assert.deepEqual(await control('detach', relayName, threadId, turnId, itemId, processId), { detached: true })
     assert.equal((await control('list'))[0].detached, true)
-    await assert.rejects(control('detach', threadId, turnId, itemId, processId), /no longer available/)
+    await assert.rejects(control('detach', relayName, threadId, turnId, itemId, processId), /no longer available/)
 
     send({ method: 'test/exit' })
     assert.deepEqual(await next(), { ...start, method: 'item/completed' })
     assert.deepEqual(await control('list'), [])
+
+    secondRelay.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n')
+    assert.deepEqual(JSON.parse((await secondLines.next()).value), start)
+    assert.deepEqual(await control('list'), [{ ...metadata, relay: secondRelayName, command: 'sleep 1', cwd: '/tmp', detached: false }])
+    assert.deepEqual(await control('detach', secondRelayName, threadId, turnId, itemId, processId), { detached: true })
   } finally {
     relay.stdin.end()
-    await closed
+    secondRelay.stdin.end()
+    await Promise.all([closed, secondClosed])
     await rm(directory, { recursive: true, force: true })
   }
 })

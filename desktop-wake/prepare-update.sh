@@ -21,6 +21,13 @@ fi
 git -C "$repo" fetch --depth 1 origin "refs/tags/$tag:refs/tags/$tag"
 git -C "$repo" worktree add -b "wake-on-command-exit-$version" "$destination" "$tag"
 git -C "$repo" rev-list --reverse "$base..HEAD" | while IFS= read -r commit; do
+    files=$(git -C "$repo" diff-tree --no-commit-id --name-only -r "$commit")
+    if [ "$files" = codex-rs/Cargo.lock ]; then continue; fi
     git -C "$destination" cherry-pick "$commit"
 done
+node "$destination/desktop-wake/normalize-lock.mjs"
+if ! git -C "$destination" diff --quiet -- codex-rs/Cargo.lock; then
+    git -C "$destination" add codex-rs/Cargo.lock
+    git -C "$destination" commit -m 'Align Cargo lock with bundled runtime version'
+fi
 printf 'Candidate checkout: %s\nBuild and verify it before switching runtimes.\n' "$destination"

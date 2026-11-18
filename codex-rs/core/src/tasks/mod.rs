@@ -1065,8 +1065,7 @@ impl Session {
             .as_ref()
             .and_then(|active| active.task.as_ref())
             .and_then(|task| {
-                (task.kind == TaskKind::Regular && task.turn_context.sub_id == turn_id)
-                    .then_some(task.turn_context.as_ref())
+                (task.kind == TaskKind::Regular).then_some(task.turn_context.as_ref())
             });
         self.services
             .unified_exec_manager

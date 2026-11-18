@@ -1,6 +1,7 @@
 import AppKit
 
 struct RunningCommand: Decodable {
+    let relay: String
     let threadId: String
     let turnId: String
     let itemId: String
@@ -9,7 +10,7 @@ struct RunningCommand: Decodable {
     let cwd: String
     let detached: Bool
 
-    var arguments: [String] { [threadId, turnId, itemId, processId] }
+    var arguments: [String] { [relay, threadId, turnId, itemId, processId] }
 }
 
 final class BackgroundMenu: NSObject, NSApplicationDelegate, NSMenuDelegate {

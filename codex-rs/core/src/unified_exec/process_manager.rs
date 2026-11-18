@@ -29,6 +29,7 @@ use crate::guardian::GuardianReviewContext;
 use crate::plugins::metrics::finish_and_track_measurements;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::ExecServerEnvConfig;
+use crate::session::turn_context::TurnContext;
 use crate::tools::ApprovalContext;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
@@ -538,6 +539,12 @@ impl UnifiedExecProcessManager {
         mut completion: Option<&mut Completion<'_>>,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let prepared = &request.prepared;
+        if self.background_capacity_reached().await {
+            self.release_process_id(request.process_id).await;
+            return Err(UnifiedExecError::process_failed(
+                "Background command capacity reached. Wait for a job to finish before starting another command.".into(),
+            ));
+        }
         let command = &prepared.resolved.command;
         let cwd = prepared.cwd.clone();
         let process = self.open_session_with_sandbox(&request, context).await;
@@ -600,13 +607,9 @@ impl UnifiedExecProcessManager {
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
-        // Serialize remote collection with later polls and final transcript publication.
-        let _interaction_guard =
-            if process.output_handles().drain_policy == OutputDrainPolicy::WaitForOutputClosure {
-                Some(process.interaction_lock().lock_owned().await)
-            } else {
-                None
-            };
+        // Serialize collection with later polls and final transcript publication.
+        let _interaction_guard = process.interaction_lock().lock_owned().await;
+        let _foreground = process.foreground_wait(&context.step_context.turn);
         start_streaming_output(&process, context);
         let start = Instant::now();
         // Persist live sessions and remote output that remains pollable after an early exit.
@@ -873,7 +876,8 @@ impl UnifiedExecProcessManager {
             process_id: response_process_id,
             exit_code,
             original_token_count: Some(original_token_count),
-            hook_command: Some(prepared.hook_command.clone()),
+            hook_command: (!process.foreground_released.is_cancelled())
+                .then(|| prepared.hook_command.clone()),
             tool_cwd: (!prepared.turn_environment.environment().is_remote())
                 .then(|| prepared.cwd.clone()),
         };
@@ -918,12 +922,13 @@ impl UnifiedExecProcessManager {
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let process_id = request.terminal.process_id;
         let locked_process = &request.terminal.process;
-        let release = !locked_process.foreground_released.is_cancelled();
         if let Some(call_id) = trace_id(&request.terminal.call_id) {
             tracing::Span::current().record("original_exec_call_id", call_id);
         }
         // Serialize writes and polls on the original terminal.
         let _interaction_guard = locked_process.interaction_lock().lock_owned().await;
+        let _foreground = locked_process.foreground_wait(&context.step_context.turn);
+        let release = !locked_process.foreground_released.is_cancelled();
         // A queued write must observe strict review enabled while it was waiting.
         let strict_auto_review = context.step_context.turn.strict_auto_review_enabled();
         let approval = {
@@ -1104,6 +1109,7 @@ impl UnifiedExecProcessManager {
         let status = self
             .refresh_process_state(process_id, locked_process, OutputRetention::UntilCollected)
             .await;
+        let mut run_completion_hook = !locked_process.foreground_released.is_cancelled();
         let (process_id, exit_code, event_call_id) = match status {
             ProcessStatus::Alive {
                 exit_code,
@@ -1111,7 +1117,9 @@ impl UnifiedExecProcessManager {
                 process_id,
             } => (Some(process_id), exit_code, call_id),
             ProcessStatus::Exited { exit_code, entry } => {
-                entry.process.discard_background_completion();
+                if !release && !run_completion_hook {
+                    run_completion_hook = entry.process.claim_background_read();
+                }
                 entry.process.cancellation_token().cancel();
                 let call_id = entry.call_id.clone();
                 if let Err(message) =
@@ -1140,7 +1148,7 @@ impl UnifiedExecProcessManager {
             process_id,
             exit_code,
             original_token_count: Some(original_token_count),
-            hook_command: Some(hook_command),
+            hook_command: run_completion_hook.then_some(hook_command),
             tool_cwd,
         };
 
@@ -1748,6 +1756,7 @@ impl UnifiedExecProcessManager {
         let mut meta: Vec<(i32, Instant, bool)> = store
             .processes
             .iter()
+            .filter(|(_, entry)| !entry.process.background_completion_pending())
             .map(|(id, entry)| (*id, entry.last_used, entry.process.has_exited()))
             .collect();
         let mut found_locked_exited_process = false;
@@ -1876,6 +1885,16 @@ impl UnifiedExecProcessManager {
             .any(|entry| entry.process.background_completion_pending())
     }
 
+    async fn background_capacity_reached(&self) -> bool {
+        let store = self.process_store.lock().await;
+        store
+            .processes
+            .values()
+            .filter(|entry| entry.process.background_completion_pending())
+            .count()
+            >= MAX_UNIFIED_EXEC_PROCESSES
+    }
+
     pub(crate) async fn background_terminal(
         &self,
         process_id: i32,
@@ -1887,7 +1906,9 @@ impl UnifiedExecProcessManager {
         store.processes.get(&process_id).is_some_and(|entry| {
             entry.call_id == item_id
                 && entry.turn_id == turn_id
-                && entry.process.background(active_turn)
+                && entry.process.background(active_turn.filter(|turn| {
+                    turn.sub_id == turn_id || entry.process.is_foreground_waited_by(&turn.sub_id)
+                }))
         })
     }
 

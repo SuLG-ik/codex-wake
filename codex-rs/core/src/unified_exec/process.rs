@@ -112,6 +112,7 @@ pub(crate) struct UnifiedExecProcess {
     interaction_lock: Arc<Mutex<()>>,
     background_state: AtomicU8,
     pub(super) foreground_released: CancellationToken,
+    foreground_turn: std::sync::Mutex<Option<String>>,
     state_tx: watch::Sender<ProcessState>,
     state_rx: watch::Receiver<ProcessState>,
     output_task: Option<JoinHandle<()>>,
@@ -160,6 +161,7 @@ impl UnifiedExecProcess {
             interaction_lock: Arc::new(Mutex::new(())),
             background_state: AtomicU8::new(BACKGROUND_UNREGISTERED),
             foreground_released: CancellationToken::new(),
+            foreground_turn: std::sync::Mutex::new(None),
             state_tx,
             state_rx,
             output_task: None,
@@ -222,13 +224,39 @@ impl UnifiedExecProcess {
 
     pub(super) fn claim_background_completion(&self) -> bool {
         self.background_state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
+                BACKGROUND_UNREGISTERED => Some(BACKGROUND_SETTLED),
+                BACKGROUND_ARMED => Some(BACKGROUND_DELIVERING),
+                _ => None,
+            })
+            .is_ok_and(|previous| previous == BACKGROUND_ARMED)
+    }
+
+    pub(super) fn claim_background_read(&self) -> bool {
+        self.background_state
             .compare_exchange(
                 BACKGROUND_ARMED,
-                BACKGROUND_DELIVERING,
+                BACKGROUND_SETTLED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
             .is_ok()
+    }
+
+    pub(super) fn foreground_wait(&self, turn: &TurnContext) -> impl Drop + '_ {
+        *self
+            .foreground_turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(turn.sub_id.clone());
+        ForegroundWait(&self.foreground_turn)
+    }
+
+    pub(super) fn is_foreground_waited_by(&self, turn_id: &str) -> bool {
+        self.foreground_turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_deref()
+            == Some(turn_id)
     }
 
     pub(super) fn discard_background_completion(&self) {
@@ -751,6 +779,17 @@ impl UnifiedExecProcess {
         let state = self.state_rx.borrow().clone();
         let _ = self.state_tx.send_replace(state.exited(exit_code));
         self.output.cancellation_token.cancel();
+    }
+}
+
+struct ForegroundWait<'a>(&'a std::sync::Mutex<Option<String>>);
+
+impl Drop for ForegroundWait<'_> {
+    fn drop(&mut self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 

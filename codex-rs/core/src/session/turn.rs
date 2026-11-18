@@ -547,18 +547,14 @@ pub(crate) async fn run_turn(
             .remove::<super::background_commands::BackgroundHandoff>()
             .is_some()
         {
-            if turn_context.session_source.is_non_root_agent()
-                || turn_context.mode() == codex_protocol::config_types::ModeKind::Plan
-            {
+            if turn_context.session_source.is_non_root_agent() {
                 background_input = sess
                     .wait_for_background_result(&turn_context, &cancellation_token)
                     .await;
             } else {
                 break;
             }
-        } else if turn_context.session_source.is_non_root_agent()
-            || turn_context.mode() == codex_protocol::config_types::ModeKind::Plan
-        {
+        } else if turn_context.session_source.is_non_root_agent() {
             background_input = sess.take_background_results().await;
         }
         // Note that pending_input would be something like a message the user
