@@ -24,9 +24,11 @@ An external Codex runtime can affect signature-dependent features such as Comput
 
 Keep the patch commits above the matching upstream tag. After Desktop updates, run `./desktop-wake/prepare-update.sh` from a clean checkout. It reads the bundled CLI version, fetches that exact upstream tag, and replays the patches into a separate worktree. It regenerates workspace version entries in the Cargo lock when an upstream release tag still uses `0.0.0` there. Conflicts stop that worktree's update.
 
-Build the candidate in its own checkout. The build checks the bundled version and runs the bridge test. Before switching, verify the Rust integration tests for a manually detached command and a model-started background command, then use a disposable Desktop chat to test the menu, an exit with a nonzero status, a new prompt during a background job, and a child agent waiting for its own job. Every candidate has its own runtime directory. When the patched runtime for the currently installed Desktop version is unavailable, launch the official Desktop normally.
+Regenerate the experimental RPC export and commit the export separately in the candidate checkout. The build checks the bundled version and runs the bridge test. Before switching, verify the Rust integration tests for a manually detached command and a model-started background command, then use a disposable Desktop chat to test the menu, an exit with a nonzero status, a new prompt during a background job, and a child agent waiting for its own job. Every candidate has its own runtime directory. When the patched runtime for the currently installed Desktop version is unavailable, launch the official Desktop normally.
 
 ```sh
 cd codex-rs
-cargo test --locked -p codex-app-server background_command_resumes_idle_thread
+python3 app-server-protocol/scripts/write_schema_fixtures.py --experimental
+cargo test --locked -p codex-app-server-protocol --lib experimental_precomputed_exports_match_generated
+cargo test --locked -p codex-app-server --test all background_command_resumes_idle_thread
 ```
