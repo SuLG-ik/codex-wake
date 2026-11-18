@@ -5746,14 +5746,22 @@ async fn background_command_resumes_idle_thread(model_background: bool) -> Resul
         .with_codex_home(codex_home.path())
         .build_initialized()
         .await?;
-    let thread = app
-        .start_thread(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
-            model: Some("mock-model".to_string()),
-            ..Default::default()
+    let cwd = codex_utils_absolute_path::AbsolutePathBuf::try_from(workspace.path().to_path_buf())?;
+    let ThreadStartResponse { thread, .. } = app
+        .request(|request_id| ClientRequest::ThreadStart {
+            request_id,
+            params: ThreadStartParams {
+                cwd: Some(cwd.to_string()),
+                environments: Some(vec![TurnEnvironmentParams {
+                    environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: cwd.into(),
+                    runtime_workspace_roots: None,
+                }]),
+                model: Some("mock-model".to_string()),
+                ..Default::default()
+            },
         })
-        .await?
-        .thread;
+        .await?;
     let TurnStartResponse { turn } = app
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
