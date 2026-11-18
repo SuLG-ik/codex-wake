@@ -9,7 +9,7 @@ This local fork uses the open-source Codex runtime bundled with ChatGPT Desktop.
 
 ## Run the release
 
-Download `codex-wake-macos-arm64.tar.gz` from [GitHub Releases](https://github.com/SuLG-ik/codex-wake/releases) on an Apple Silicon Mac. The release also provides a SHA-256 checksum. Extract the archive and open a terminal in the extracted `codex-wake-macos-arm64` directory.
+Download `codex-wake-macos-arm64.tar.gz` from [GitHub Releases](https://github.com/SuLG-ik/codex-wake/releases) on an Apple Silicon Mac. The release provides a SHA-256 checksum and uses ad-hoc signing. Extract the archive and open a terminal in the extracted `codex-wake-macos-arm64` directory.
 
 ```sh
 ./codex --version
@@ -33,7 +33,7 @@ Run the launcher after quitting existing ChatGPT windows and the app itself. The
 
 An external Codex runtime can affect signature-dependent features such as Computer Use or browser integration. See [openai/codex#34583](https://github.com/openai/codex/issues/34583).
 
-To create a portable release archive, run `./desktop-wake/package-macos.sh RUNTIME_DIR SIDECAR_DIR OUTPUT_DIR`. Use the matching `codex-exec-server` and `codex-code-mode-host` binaries from the [official CLI release](https://github.com/openai/codex/releases/tag/rust-v0.169.0-alpha.11.1) in `SIDECAR_DIR`.
+To create a portable release archive, run `./desktop-wake/package-macos.sh RUNTIME_DIR SIDECAR_DIR OUTPUT_DIR`. Verify the asset digests and extract the matching `codex-exec-server` and `codex-code-mode-host` binaries from the [official CLI release](https://github.com/openai/codex/releases/tag/rust-v0.169.0-alpha.11.1) into `SIDECAR_DIR`.
 
 ## Updates
 

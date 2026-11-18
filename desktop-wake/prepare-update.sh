@@ -3,8 +3,13 @@ set -eu
 wake_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo=$(dirname -- "$wake_dir")
 app=${CODEX_WAKE_APP:-/Applications/ChatGPT.app}
-base=$(git -C "$repo" describe --tags --match 'rust-v*' --abbrev=0)
 upstream_repo=${CODEX_WAKE_UPSTREAM:-https://github.com/openai/codex.git}
+source_version=$(sed -n '/^\[workspace.package\]/{n;s/^version = "\([^"]*\)".*/\1/p;}' "$repo/codex-rs/Cargo.toml")
+if [ -z "$source_version" ]; then
+    printf '%s\n' 'Could not read the source runtime version from Cargo.toml.' >&2
+    exit 1
+fi
+base=rust-v$source_version
 installed=$("$app/Contents/Resources/codex-cli/bin/codex" --version)
 version=${installed#codex-cli }
 tag=rust-v$version
@@ -19,6 +24,13 @@ if [ -n "$(git -C "$repo" status --porcelain)" ]; then
     exit 1
 fi
 
+if ! git -C "$repo" show-ref --verify --quiet "refs/tags/$base"; then
+    git -C "$repo" fetch --depth 1 "$upstream_repo" "refs/tags/$base:refs/tags/$base"
+fi
+if ! git -C "$repo" merge-base --is-ancestor "$base" HEAD; then
+    printf 'Expected %s in the patch branch history.\n' "$base" >&2
+    exit 1
+fi
 git -C "$repo" fetch --depth 1 "$upstream_repo" "refs/tags/$tag:refs/tags/$tag"
 git -C "$repo" worktree add -b "wake-on-command-exit-$version" "$destination" "$tag"
 git -C "$repo" rev-list --reverse "$base..HEAD" | while IFS= read -r commit; do

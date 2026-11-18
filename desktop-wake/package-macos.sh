@@ -29,9 +29,13 @@ install -m 755 "$runtime_dir/codex" "$package_dir/codex"
 install -m 755 "$runtime_dir/BackgroundMenu" "$package_dir/BackgroundMenu"
 for helper in codex-exec-server codex-code-mode-host; do
     install -m 755 "$sidecar_dir/$helper" "$package_dir/$helper"
+    if ! codesign --verify "$package_dir/$helper" 2>/dev/null; then
+        codesign --force --sign - "$package_dir/$helper"
+    fi
 done
 for executable in BackgroundMenu codex-exec-server codex-code-mode-host; do
     test "$(lipo -archs "$package_dir/$executable")" = "$arch"
+    codesign --verify "$package_dir/$executable"
 done
 
 install -m 755 "$wake_dir/launch.sh" "$package_dir/desktop-wake/launch.sh"

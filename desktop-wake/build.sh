@@ -23,7 +23,8 @@ install -m 755 "$CARGO_TARGET_DIR/$profile/codex" "$candidate/codex"
 for sidecar in codex-exec-server codex-code-mode-host; do
     install -m 755 "$bundle/bin/$sidecar" "$candidate/$sidecar"
 done
-xcrun swiftc -module-cache-path "$CARGO_TARGET_DIR/swift-cache" "$wake_dir/BackgroundMenu.swift" -o "$candidate/BackgroundMenu"
+runtime_arch=$(lipo -archs "$candidate/codex")
+xcrun swiftc -target "$runtime_arch-apple-macosx13.0" -module-cache-path "$CARGO_TARGET_DIR/swift-cache" "$wake_dir/BackgroundMenu.swift" -o "$candidate/BackgroundMenu"
 node --test "$wake_dir/bridge.test.mjs"
 test "$("$candidate/codex" --version)" = "$app_version"
 printf '%s\n' "$app_version" > "$candidate/version"
