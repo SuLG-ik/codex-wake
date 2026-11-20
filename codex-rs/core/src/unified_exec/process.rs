@@ -224,7 +224,7 @@ impl UnifiedExecProcess {
 
     pub(super) fn claim_background_completion(&self) -> bool {
         self.background_state
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
                 BACKGROUND_UNREGISTERED => Some(BACKGROUND_SETTLED),
                 BACKGROUND_ARMED => Some(BACKGROUND_DELIVERING),
                 _ => None,

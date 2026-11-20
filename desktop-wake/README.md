@@ -9,9 +9,9 @@ This local fork uses the open-source Codex runtime bundled with ChatGPT Desktop.
 
 ## Open Codex Wake.app
 
-Download `codex-wake-macos-arm64-app.zip` from [GitHub Releases](https://github.com/SuLG-ik/codex-wake/releases) on an Apple Silicon Mac. Extract the ZIP and open **Codex Wake.app** in Finder. It starts the installed ChatGPT Desktop app with the patched runtime and adds the background command menu to the macOS menu bar. The launcher offers to quit ChatGPT first if it is already open.
+This branch targets Codex CLI 0.171.0. Build a matching archive for a Desktop that bundles this runtime. [Codex Wake v0.2.0](https://github.com/SuLG-ik/codex-wake/releases/tag/wake-v0.2.0) is the downloadable Finder app for Desktop with bundled Codex 0.169.0-alpha.11.1. Extract its ZIP and open **Codex Wake.app** in Finder. It starts the installed ChatGPT Desktop app with the patched runtime and adds the background command menu to the macOS menu bar. The launcher offers to quit ChatGPT first if it is already open.
 
-This app build pairs with ChatGPT Desktop that bundles `codex-cli 0.169.0-alpha.11.1`. The app checks the bundled version before it opens Desktop. Node.js and the runtime helpers are included. The release uses ad-hoc signing and includes a SHA-256 checksum.
+The Finder app pairs with the ChatGPT Desktop runtime version embedded in its archive. The app checks the bundled version before it opens Desktop. Node.js and the runtime helpers are included. The release uses ad-hoc signing and includes a SHA-256 checksum.
 
 The patched terminal CLI is also available inside the app at `Codex Wake.app/Contents/Resources/runtime/codex`.
 
@@ -28,7 +28,7 @@ Run the launcher after quitting existing ChatGPT windows and the app itself. The
 
 An external Codex runtime can affect signature-dependent features such as Computer Use or browser integration. See [openai/codex#34583](https://github.com/openai/codex/issues/34583).
 
-To create the Finder app release, run `./desktop-wake/package-macos.sh RUNTIME_DIR SIDECAR_DIR OUTPUT_DIR NODE_DIST_DIR`. Verify the asset digests and extract the matching `codex-exec-server` and `codex-code-mode-host` binaries from the [official CLI release](https://github.com/openai/codex/releases/tag/rust-v0.169.0-alpha.11.1) into `SIDECAR_DIR`. Use an extracted [official Node.js distribution](https://nodejs.org/dist/) with `bin/node` and `LICENSE` for `NODE_DIST_DIR`. Omitting that last argument builds the terminal archive.
+To create the Finder app release, run `./desktop-wake/package-macos.sh RUNTIME_DIR SIDECAR_DIR OUTPUT_DIR NODE_DIST_DIR`. Verify the asset digests and extract the matching `codex-exec-server` and `codex-code-mode-host` binaries from the [official CLI release](https://github.com/openai/codex/releases/tag/rust-v0.171.0) into `SIDECAR_DIR`. Use an extracted [official Node.js distribution](https://nodejs.org/dist/) with `bin/node` and `LICENSE` for `NODE_DIST_DIR`. Omitting that last argument builds the terminal archive.
 
 ## Updates
 
