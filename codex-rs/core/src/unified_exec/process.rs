@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -35,10 +36,16 @@ use super::UNIFIED_EXEC_OUTPUT_MAX_BYTES;
 use super::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
 use super::UnifiedExecError;
 use super::process_state::ProcessState;
+use crate::session::background_commands::BackgroundHandoff;
+use crate::session::turn_context::TurnContext;
 use crate::shell_snapshot::ShellSnapshotFile;
 
 const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
 const REMOTE_OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(5);
+const BACKGROUND_UNREGISTERED: u8 = 0;
+const BACKGROUND_ARMED: u8 = 1;
+const BACKGROUND_SETTLED: u8 = 2;
+const BACKGROUND_DELIVERING: u8 = 3;
 
 /// Output pending model polling and the retained completion transcript.
 /// Append both under the same lock so cancellation cannot split an update.
@@ -103,6 +110,9 @@ pub(crate) struct UnifiedExecProcess {
     output: OutputHandles,
     output_drained: Arc<Notify>,
     interaction_lock: Arc<Mutex<()>>,
+    background_state: AtomicU8,
+    pub(super) foreground_released: CancellationToken,
+    foreground_turn: std::sync::Mutex<Option<String>>,
     state_tx: watch::Sender<ProcessState>,
     state_rx: watch::Receiver<ProcessState>,
     output_task: Option<JoinHandle<()>>,
@@ -149,6 +159,9 @@ impl UnifiedExecProcess {
             output,
             output_drained,
             interaction_lock: Arc::new(Mutex::new(())),
+            background_state: AtomicU8::new(BACKGROUND_UNREGISTERED),
+            foreground_released: CancellationToken::new(),
+            foreground_turn: std::sync::Mutex::new(None),
             state_tx,
             state_rx,
             output_task: None,
@@ -186,6 +199,76 @@ impl UnifiedExecProcess {
 
     pub(super) fn output_handles(&self) -> &OutputHandles {
         &self.output
+    }
+
+    pub(super) fn background(&self, turn: Option<&TurnContext>) -> bool {
+        if self.has_exited()
+            || self
+                .background_state
+                .compare_exchange(
+                    BACKGROUND_UNREGISTERED,
+                    BACKGROUND_ARMED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_err()
+        {
+            return false;
+        }
+        if let Some(turn) = turn {
+            turn.extension_data.insert(BackgroundHandoff);
+        }
+        self.foreground_released.cancel();
+        true
+    }
+
+    pub(super) fn claim_background_completion(&self) -> bool {
+        self.background_state
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
+                BACKGROUND_UNREGISTERED => Some(BACKGROUND_SETTLED),
+                BACKGROUND_ARMED => Some(BACKGROUND_DELIVERING),
+                _ => None,
+            })
+            .is_ok_and(|previous| previous == BACKGROUND_ARMED)
+    }
+
+    pub(super) fn claim_background_read(&self) -> bool {
+        self.background_state
+            .compare_exchange(
+                BACKGROUND_ARMED,
+                BACKGROUND_SETTLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    pub(super) fn foreground_wait(&self, turn: &TurnContext) -> impl Drop + '_ {
+        *self
+            .foreground_turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(turn.sub_id.clone());
+        ForegroundWait(&self.foreground_turn)
+    }
+
+    pub(super) fn is_foreground_waited_by(&self, turn_id: &str) -> bool {
+        self.foreground_turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_deref()
+            == Some(turn_id)
+    }
+
+    pub(super) fn discard_background_completion(&self) {
+        self.background_state
+            .store(BACKGROUND_SETTLED, Ordering::Release);
+    }
+
+    pub(super) fn background_completion_pending(&self) -> bool {
+        matches!(
+            self.background_state.load(Ordering::Acquire),
+            BACKGROUND_ARMED | BACKGROUND_DELIVERING
+        )
     }
 
     pub(super) fn output_receiver(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
@@ -696,6 +779,17 @@ impl UnifiedExecProcess {
         let state = self.state_rx.borrow().clone();
         let _ = self.state_tx.send_replace(state.exited(exit_code));
         self.output.cancellation_token.cancel();
+    }
+}
+
+struct ForegroundWait<'a>(&'a std::sync::Mutex<Option<String>>);
+
+impl Drop for ForegroundWait<'_> {
+    fn drop(&mut self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 

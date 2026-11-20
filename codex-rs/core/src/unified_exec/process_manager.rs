@@ -29,6 +29,7 @@ use crate::guardian::GuardianReviewContext;
 use crate::plugins::metrics::finish_and_track_measurements;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::ExecServerEnvConfig;
+use crate::session::turn_context::TurnContext;
 use crate::tools::ApprovalContext;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
@@ -56,6 +57,7 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinInteractionEvent;
 use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::async_watcher::BackgroundHookContext;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::spawn_exit_watcher;
@@ -546,6 +548,12 @@ impl UnifiedExecProcessManager {
         mut completion: Option<&mut Completion<'_>>,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let prepared = &request.prepared;
+        if self.background_capacity_reached().await {
+            self.release_process_id(request.process_id).await;
+            return Err(UnifiedExecError::process_failed(
+                "Background command capacity reached. Wait for a job to finish before starting another command.".into(),
+            ));
+        }
         let command = &prepared.resolved.command;
         let cwd = prepared.cwd.clone();
         let process = self.open_session_with_sandbox(&request, context).await;
@@ -606,16 +614,9 @@ impl UnifiedExecProcessManager {
             Some(request.process_id.to_string()),
             plugin_attribution.clone(),
         );
-        emitter.emit(event_ctx, ToolEventStage::Begin).await;
-
-        // Serialize remote collection with later polls and final transcript publication.
-        let _interaction_guard =
-            if process.output_handles().drain_policy == OutputDrainPolicy::WaitForOutputClosure {
-                Some(process.interaction_lock().lock_owned().await)
-            } else {
-                None
-            };
-        start_streaming_output(&process, context);
+        // Serialize collection with later polls and final transcript publication.
+        let _interaction_guard = process.interaction_lock().lock_owned().await;
+        let _foreground = process.foreground_wait(&context.step_context.turn);
         let start = Instant::now();
         // Persist live sessions and remote output that remains pollable after an early exit.
         let process_stored = (!process.has_exited() && process.exit_code().is_none())
@@ -649,9 +650,17 @@ impl UnifiedExecProcessManager {
                 initial_exec_command_guard.metrics_sidecar.take(),
                 Arc::clone(&output_buffer),
                 Arc::clone(&initial_exec_command_active),
+                !prepared.turn_environment.environment().is_remote(),
             )
             .await;
+            if prepared.wake_on_exit {
+                process.background(Some(&context.step_context.turn));
+            }
         }
+
+        // A UI can detach the command as soon as it sees the started event.
+        emitter.emit(event_ctx, ToolEventStage::Begin).await;
+        start_streaming_output(&process, context);
 
         let yield_time_ms = clamp_yield_time(prepared.yield_time_ms);
         // For the initial exec_command call, we both stream output to events
@@ -664,13 +673,18 @@ impl UnifiedExecProcessManager {
         let deadline = start
             .checked_add(wait)
             .ok_or_else(|| UnifiedExecError::process_failed("timeout_ms is too large".into()))?;
-        let collected_output = Self::collect_output_until_deadline(
+        let collection = Self::collect_output_until_deadline(
             process.output_handles(),
             Some(context.session.subscribe_elicitation_pause_state()),
             deadline,
-        )
-        .await;
+        );
+        let collected_output = tokio::select! {
+            biased;
+            _ = process.foreground_released.cancelled() => HeadTailBuffer::default(),
+            output = collection => output,
+        };
         if let Some(completion) = completion.as_mut()
+            && !process.foreground_released.is_cancelled()
             && !process.has_exited()
         {
             completion.timed_out = true;
@@ -872,7 +886,8 @@ impl UnifiedExecProcessManager {
             process_id: response_process_id,
             exit_code,
             original_token_count: Some(original_token_count),
-            hook_command: Some(prepared.hook_command.clone()),
+            hook_command: (!process.foreground_released.is_cancelled())
+                .then(|| prepared.hook_command.clone()),
             tool_cwd: (!prepared.turn_environment.environment().is_remote())
                 .then(|| prepared.cwd.clone()),
         };
@@ -922,6 +937,8 @@ impl UnifiedExecProcessManager {
         }
         // Serialize writes and polls on the original terminal.
         let _interaction_guard = locked_process.interaction_lock().lock_owned().await;
+        let _foreground = locked_process.foreground_wait(&context.step_context.turn);
+        let release = !locked_process.foreground_released.is_cancelled();
         // A queued write must observe strict review enabled while it was waiting.
         let strict_auto_review = context.step_context.turn.strict_auto_review_enabled();
         let approval = {
@@ -1062,8 +1079,11 @@ impl UnifiedExecProcessManager {
         };
         let start = Instant::now();
         let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected_output =
-            Self::collect_output_until_deadline(&output, pause_state, deadline).await;
+        let collected_output = tokio::select! {
+            biased;
+            _ = locked_process.foreground_released.cancelled(), if release => HeadTailBuffer::default(),
+            output = Self::collect_output_until_deadline(&output, pause_state, deadline) => output,
+        };
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let original_token_count = usize::try_from(approx_tokens_from_byte_count(
@@ -1099,6 +1119,7 @@ impl UnifiedExecProcessManager {
         let status = self
             .refresh_process_state(process_id, locked_process, OutputRetention::UntilCollected)
             .await;
+        let mut run_completion_hook = !locked_process.foreground_released.is_cancelled();
         let (process_id, exit_code, event_call_id) = match status {
             ProcessStatus::Alive {
                 exit_code,
@@ -1106,6 +1127,9 @@ impl UnifiedExecProcessManager {
                 process_id,
             } => (Some(process_id), exit_code, call_id),
             ProcessStatus::Exited { exit_code, entry } => {
+                if !release && !run_completion_hook {
+                    run_completion_hook = entry.process.claim_background_read();
+                }
                 entry.process.cancellation_token().cancel();
                 let call_id = entry.call_id.clone();
                 if let Err(message) =
@@ -1134,7 +1158,7 @@ impl UnifiedExecProcessManager {
             process_id,
             exit_code,
             original_token_count: Some(original_token_count),
-            hook_command: Some(hook_command),
+            hook_command: run_completion_hook.then_some(hook_command),
             tool_cwd,
         };
 
@@ -1268,13 +1292,20 @@ impl UnifiedExecProcessManager {
         metrics_sidecar: Option<PluginMetricsSidecar>,
         output_buffer: Arc<tokio::sync::Mutex<OutputBuffers>>,
         initial_exec_command_active: Arc<AtomicBool>,
+        local: bool,
     ) {
         let plugin_metrics_sidecar =
             metrics_sidecar.map(|sidecar| Arc::new(std::sync::Mutex::new(Some(sidecar))));
+        let background_hook = BackgroundHookContext {
+            command: hook_command.clone(),
+            environment_id: environment_id.clone(),
+            cwd: local.then(|| cwd.clone()),
+        };
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             plugin_metrics_sidecar: plugin_metrics_sidecar.clone(),
             call_id: context.call_id.clone(),
+            turn_id: context.step_context.turn.sub_id.clone(),
             process_id,
             cwd: cwd.clone(),
             initial_exec_command_active,
@@ -1303,9 +1334,11 @@ impl UnifiedExecProcessManager {
             started_at,
             network_denial_monitor,
             plugin_metrics_sidecar,
+            Some(background_hook),
         );
         // Install the watcher before cancellable cleanup, and outside the process-store lock.
         if let Some(pruned_entry) = pruned_entry {
+            pruned_entry.process.discard_background_completion();
             unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
@@ -1729,6 +1762,7 @@ impl UnifiedExecProcessManager {
         let mut meta: Vec<(i32, Instant, bool)> = store
             .processes
             .iter()
+            .filter(|(_, entry)| !entry.process.background_completion_pending())
             .map(|(id, entry)| (*id, entry.last_used, entry.process.has_exited()))
             .collect();
         let mut found_locked_exited_process = false;
@@ -1807,6 +1841,7 @@ impl UnifiedExecProcessManager {
         };
 
         for entry in entries {
+            entry.process.discard_background_completion();
             unregister_network_approval_for_entry(&entry).await;
             entry.process.terminate();
         }
@@ -1848,12 +1883,56 @@ impl UnifiedExecProcessManager {
             .collect()
     }
 
+    pub(crate) async fn has_background_jobs(&self) -> bool {
+        let store = self.process_store.lock().await;
+        store
+            .processes
+            .values()
+            .any(|entry| entry.process.background_completion_pending())
+    }
+
+    async fn background_capacity_reached(&self) -> bool {
+        let store = self.process_store.lock().await;
+        store
+            .processes
+            .values()
+            .filter(|entry| entry.process.background_completion_pending())
+            .count()
+            >= MAX_UNIFIED_EXEC_PROCESSES
+    }
+
+    pub(crate) async fn background_terminal(
+        &self,
+        process_id: i32,
+        item_id: &str,
+        turn_id: &str,
+        active_turn: Option<&TurnContext>,
+    ) -> bool {
+        let store = self.process_store.lock().await;
+        store.processes.get(&process_id).is_some_and(|entry| {
+            entry.call_id == item_id
+                && entry.turn_id == turn_id
+                && entry.process.background(active_turn.filter(|turn| {
+                    turn.sub_id == turn_id || entry.process.is_foreground_waited_by(&turn.sub_id)
+                }))
+        })
+    }
+
+    pub(crate) fn background_terminal_from_tool(
+        &self,
+        terminal: &TerminalSession,
+        turn: &TurnContext,
+    ) -> bool {
+        terminal.process.background(Some(turn))
+    }
+
     pub(crate) async fn terminate_process(&self, process_id: i32) -> bool {
         let (process, already_exited) = {
             let store = self.process_store.lock().await;
             let Some(entry) = store.processes.get(&process_id) else {
                 return false;
             };
+            entry.process.discard_background_completion();
             (Arc::clone(&entry.process), entry.process.has_exited())
         };
 

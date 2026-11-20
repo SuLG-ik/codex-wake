@@ -99,6 +99,11 @@ impl UnifiedExecProcessManager {
 
             let outcome = if completion.timed_out {
                 "timed_out"
+            } else if result
+                .as_ref()
+                .is_ok_and(|output| output.process_id.is_some())
+            {
+                "yielded"
             } else if result.is_ok() {
                 "exited"
             } else {

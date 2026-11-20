@@ -5709,6 +5709,139 @@ async fn command_execution_notifications_include_process_id(
     Ok(())
 }
 
+#[cfg(unix)]
+#[test_case(false; "desktop_detach")]
+#[test_case(true; "model_background")]
+#[tokio::test]
+async fn background_command_resumes_idle_thread(model_background: bool) -> Result<()> {
+    use codex_app_server_protocol::ThreadBackgroundTerminalsDetachParams;
+    use codex_app_server_protocol::ThreadBackgroundTerminalsDetachResponse;
+
+    skip_if_no_network!(Ok(()));
+    let mut arguments = json!({
+        "cmd": "while [ ! -f release ]; do sleep 0.1; done; printf 'background-result'; exit 7",
+        "shell": "/bin/sh",
+        "login": false,
+        "yield_time_ms": 30_000,
+    });
+    if model_background {
+        arguments["on_exit"] = json!("wake");
+    }
+    let server = create_mock_responses_server_sequence(vec![
+        responses::sse(vec![
+            responses::ev_response_created("launch-background"),
+            responses::ev_function_call("background-call", "exec_command", &arguments.to_string()),
+            responses::ev_completed("launch-background"),
+        ]),
+        create_final_assistant_message_sse_response("observed completion")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_sandbox_mode("danger-full-access")
+        .enable_feature(Feature::UnifiedExec)
+        .disable_feature(Feature::ShellSnapshot)
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let cwd = codex_utils_absolute_path::AbsolutePathBuf::try_from(workspace.path().to_path_buf())?;
+    let ThreadStartResponse { thread, .. } = app
+        .request(|request_id| ClientRequest::ThreadStart {
+            request_id,
+            params: ThreadStartParams {
+                cwd: Some(cwd.as_path().display().to_string()),
+                environments: Some(vec![TurnEnvironmentParams {
+                    environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: cwd.into(),
+                    runtime_workspace_roots: None,
+                }]),
+                model: Some("mock-model".to_string()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    let TurnStartResponse { turn } = app
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: "Run the command and wait for it.".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    if !model_background {
+        let (item_id, process_id) = timeout(DEFAULT_READ_TIMEOUT, async {
+            loop {
+                let started: ItemStartedNotification =
+                    app.read_notification("item/started").await?;
+                if let ThreadItemPayload::CommandExecution {
+                    id,
+                    process_id: Some(process_id),
+                    ..
+                } = started.item.payload
+                {
+                    break Ok::<_, anyhow::Error>((id, process_id));
+                }
+            }
+        })
+        .await??;
+        let response: ThreadBackgroundTerminalsDetachResponse = app
+            .request(
+                |request_id| ClientRequest::ThreadBackgroundTerminalsDetach {
+                    request_id,
+                    params: ThreadBackgroundTerminalsDetachParams {
+                        thread_id: thread.id.clone(),
+                        turn_id: turn.id.clone(),
+                        item_id,
+                        process_id,
+                    },
+                },
+            )
+            .await?;
+        assert!(response.detached);
+    }
+
+    let parked: TurnCompletedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_notification("turn/completed"),
+    )
+    .await??;
+    assert_eq!(parked.turn.id, turn.id);
+    let response_requests = || async {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.url.path().ends_with("/responses"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(response_requests().await.len(), 1);
+    std::fs::write(workspace.path().join("release"), b"")?;
+
+    let resumed: TurnCompletedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_notification("turn/completed"),
+    )
+    .await??;
+    assert_eq!(resumed.thread_id, thread.id);
+    assert_ne!(resumed.turn.id, turn.id);
+    let requests = response_requests().await;
+    assert_eq!(requests.len(), 2);
+    let request = String::from_utf8_lossy(&requests[1].body);
+    assert!(request.contains("background-result"));
+    assert!(request.contains("Exit code: 7"));
+    Ok(())
+}
+
 #[cfg_attr(windows, ignore = "plugin attribution fixture is Unix-only")]
 #[test_case(CommandExecutionStatus::Completed; "completed")]
 #[test_case(CommandExecutionStatus::Failed; "launch_failure")]
