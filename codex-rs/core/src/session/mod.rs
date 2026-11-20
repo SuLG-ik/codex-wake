@@ -268,6 +268,7 @@ pub(crate) mod submission;
 pub(crate) use reasoning_effort::RequestEffortUsage;
 pub(crate) use submission::Submission;
 use submission::SubmissionOp;
+pub(crate) mod background_commands;
 mod cloud_plugins;
 mod input_queue;
 mod mcp;

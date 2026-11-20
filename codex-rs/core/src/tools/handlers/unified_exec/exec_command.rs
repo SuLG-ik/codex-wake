@@ -278,7 +278,7 @@ fn one_shot_exec_command_spec(spec: ToolSpec) -> ToolSpec {
     };
     spec.description = spec.description.replacen(
         "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
-        "Runs a command to completion and returns its output. The process is terminated on timeout or cancellation and cannot be resumed.",
+        "Runs a command to completion and returns its output. A foreground command is terminated on timeout or cancellation. Set on_exit to wake to wait asynchronously for a long-running command.",
         1,
     );
     let properties = spec.parameters.properties.get_or_insert_default();
@@ -290,16 +290,6 @@ fn one_shot_exec_command_spec(spec: ToolSpec) -> ToolSpec {
             "Maximum command runtime. Defaults to 10000 ms.".to_string(),
         )),
     );
-    spec.output_schema = spec.output_schema.map(|schema| {
-        let mut schema = schema.into_value();
-        if let Some(output_properties) = schema
-            .get_mut("properties")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            output_properties.remove("session_id");
-        }
-        schema.into()
-    });
     ToolSpec::Function(spec)
 }
 

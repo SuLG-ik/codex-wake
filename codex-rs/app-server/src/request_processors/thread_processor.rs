@@ -956,6 +956,22 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_background_terminals_detach(
+        &self,
+        params: ThreadBackgroundTerminalsDetachParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let process_id = params.process_id.parse::<i32>().map_err(|err| {
+            invalid_request(format!("invalid background terminal process id: {err}"))
+        })?;
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        let detached = thread
+            .move_terminal_to_background(process_id, &params.item_id, &params.turn_id)
+            .await;
+        Ok(Some(
+            ThreadBackgroundTerminalsDetachResponse { detached }.into(),
+        ))
+    }
+
     async fn send_deprecation_notice(&self, connection_id: ConnectionId, summary: &str) {
         self.outgoing
             .send_server_notification_to_connections(

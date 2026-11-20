@@ -616,7 +616,9 @@ async fn start_listener(
                     if !unloading_state.should_unload_now() {
                         continue;
                     }
-                    if matches!(conversation.agent_status().await, AgentStatus::Running) {
+                    if matches!(conversation.agent_status().await, AgentStatus::Running)
+                        || conversation.has_background_jobs().await
+                    {
                         unloading_state.note_thread_activity_observed();
                         continue;
                     }

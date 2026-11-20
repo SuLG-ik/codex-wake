@@ -1628,6 +1628,11 @@ impl MessageProcessor {
                     .thread_background_terminals_terminate(params)
                     .await
             }
+            ClientRequest::ThreadBackgroundTerminalsDetach { params, .. } => {
+                self.thread_processor
+                    .thread_background_terminals_detach(params)
+                    .await
+            }
             ClientRequest::ThreadRevert { params, .. } => {
                 self.thread_processor
                     .thread_revert(

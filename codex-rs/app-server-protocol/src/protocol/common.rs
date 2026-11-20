@@ -806,6 +806,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadBackgroundTerminalsTerminateResponse,
     },
+    #[experimental("thread/backgroundTerminals/detach")]
+    ThreadBackgroundTerminalsDetach => "thread/backgroundTerminals/detach" {
+        params: v2::ThreadBackgroundTerminalsDetachParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadBackgroundTerminalsDetachResponse,
+    },
     ThreadRevert => "thread/revert" {
         params: v2::ThreadRevertParams,
         serialization: thread_id(params.thread_id),

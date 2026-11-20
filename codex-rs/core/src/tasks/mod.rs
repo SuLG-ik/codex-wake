@@ -578,7 +578,9 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.input_queue.has_pending_mailbox_items().await {
+        if !self.has_background_results().await
+            && !self.input_queue.has_pending_mailbox_items().await
+        {
             return;
         }
 
@@ -591,7 +593,10 @@ impl Session {
             .models_manager
             .refresh_after_auth_change(self.get_config().await.http_client_factory())
             .await;
-        let session_configuration = if self.enabled(Feature::WakeOnAgentMessages) {
+        let session_configuration = if self.enabled(Feature::WakeOnAgentMessages)
+            || self.has_background_results().await
+            || self.has_background_agent_mail_wait()
+        {
             let Some(configuration) = self.pending_work_turn_configuration(&turn_state).await
             else {
                 return;
@@ -609,7 +614,7 @@ impl Session {
             }
             None
         };
-        // Read the routing options now and leave the mail queued until task registration.
+        // Read routing options and leave queued work untouched until task registration.
         let wake_options = self.input_queue.pending_wake_options().await;
         let triggered = wake_options.is_some();
         let start_options = wake_options.unwrap_or(previous_options);
@@ -649,6 +654,11 @@ impl Session {
                     ..Default::default()
                 },
             );
+        if self.has_background_results().await {
+            turn_context
+                .extension_data
+                .insert(crate::session::background_commands::ReceiveBackgroundResults);
+        }
         self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
             .await;
         // Context construction can outlive an interrupt or replacement. Do not let
@@ -1158,6 +1168,25 @@ impl Session {
 
     pub(crate) async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
         self.services.unified_exec_manager.list_processes().await
+    }
+
+    pub(crate) async fn move_terminal_to_background(
+        &self,
+        process_id: i32,
+        item_id: &str,
+        turn_id: &str,
+    ) -> bool {
+        let active = self.active_turn.lock().await;
+        let turn = active
+            .as_ref()
+            .and_then(|active| active.task.as_ref())
+            .and_then(|task| {
+                (task.kind == TaskKind::Regular).then_some(task.turn_context.as_ref())
+            });
+        self.services
+            .unified_exec_manager
+            .background_terminal(process_id, item_id, turn_id, turn)
+            .await
     }
 
     pub(crate) async fn terminate_background_terminal(&self, process_id: i32) -> bool {

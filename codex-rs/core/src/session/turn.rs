@@ -543,21 +543,49 @@ pub(crate) async fn run_turn(
     let mut guardian_budget_compacted = false;
     let mut unfinished_plan_id = None;
     loop {
+        let can_receive_turn_input = sess
+            .work_budget()
+            .can_receive_turn_input(sess.thread_id(), &turn_context.sub_id);
+        let mut background_input = Vec::new();
+        if turn_context
+            .extension_data
+            .remove::<super::background_commands::BackgroundHandoff>()
+            .is_some()
+        {
+            if turn_context.session_source.is_non_root_agent() && can_receive_turn_input {
+                background_input = sess
+                    .wait_for_background_result(&turn_context, &cancellation_token)
+                    .await;
+            } else {
+                break;
+            }
+        } else if can_receive_turn_input
+            && (turn_context.session_source.is_non_root_agent()
+                || turn_context
+                    .extension_data
+                    .remove::<super::background_commands::ReceiveBackgroundResults>()
+                    .is_some())
+        {
+            background_input = sess.take_background_results().await;
+        }
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = if can_drain_pending_input
-            && sess
-                .work_budget()
-                .can_receive_turn_input(sess.thread_id(), &turn_context.sub_id)
+        if can_drain_pending_input && can_receive_turn_input {
+            background_input.extend(
+                sess.input_queue
+                    .get_pending_input(&sess.active_turn)
+                    .await
+                    .0,
+            );
+        }
+        if background_input
+            .iter()
+            .any(|item| matches!(item, TurnInput::InterAgentCommunication(_)))
         {
-            sess.input_queue
-                .get_pending_input(&sess.active_turn)
-                .await
-                .0
-        } else {
-            Vec::new()
-        };
+            sess.clear_background_agent_mail_wait();
+        }
+        let pending_input = background_input;
 
         if run_hooks_and_record_inputs(
             &sess,

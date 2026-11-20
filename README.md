@@ -1,3 +1,11 @@
+# Codex Wake
+
+An unofficial Codex fork with event-driven background execution. Send a running command to the background from the macOS menu bar, or let Codex wait for it and resume the same chat on exit without model polling.
+
+[Download the macOS Apple Silicon build](https://github.com/SuLG-ik/codex-wake/releases) · [Run, build, and update Codex Wake](desktop-wake/README.md)
+
+---
+
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
