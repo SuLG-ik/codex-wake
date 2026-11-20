@@ -905,12 +905,6 @@ fn wait_agent_tool_parameters_v1(options: WaitAgentTimeoutOptions) -> JsonSchema
                 options.default_timeout_ms, options.min_timeout_ms, options.max_timeout_ms,
             ))),
         ),
-        (
-            "until_event".to_string(),
-            JsonSchema::boolean(Some(
-                "Wait until a selected agent finishes, using no model calls while waiting. Omit timeout_ms when using this option.".to_string(),
-            )),
-        ),
     ]);
 
     JsonSchema::object(
@@ -921,21 +915,13 @@ fn wait_agent_tool_parameters_v1(options: WaitAgentTimeoutOptions) -> JsonSchema
 }
 
 fn wait_agent_tool_parameters_v2(options: WaitAgentTimeoutOptions) -> JsonSchema {
-    let properties = BTreeMap::from([
-        (
-            "timeout_ms".to_string(),
-            JsonSchema::number(Some(format!(
-                "Timeout in milliseconds. Defaults to {}, min {}, max {}.",
-                options.default_timeout_ms, options.min_timeout_ms, options.max_timeout_ms,
-            ))),
-        ),
-        (
-            "until_event".to_string(),
-            JsonSchema::boolean(Some(
-                "Wait for a mailbox event or new user input, using no model calls while waiting. Omit timeout_ms when using this option.".to_string(),
-            )),
-        ),
-    ]);
+    let properties = BTreeMap::from([(
+        "timeout_ms".to_string(),
+        JsonSchema::number(Some(format!(
+            "Timeout in milliseconds. Defaults to {}, min {}, max {}.",
+            options.default_timeout_ms, options.min_timeout_ms, options.max_timeout_ms,
+        ))),
+    )]);
 
     JsonSchema::object(properties, /*required*/ None, Some(false.into()))
 }

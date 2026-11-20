@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use super::background_commands::with_background_command_instructions;
 use super::session::Session;
 use super::step_context::StepContext;
 use super::turn_context::TurnContext;
@@ -121,14 +122,14 @@ impl Session {
             };
             ModelInstructionsState::for_incremental_tools(
                 &model_info.slug,
-                instructions,
+                with_background_command_instructions(instructions),
                 turn_context
                     .config
                     .features
                     .enabled(Feature::SuppressModelChangeAnnouncements),
             )
         } else {
-            let model_instructions = render_current_instructions();
+            let model_instructions = with_background_command_instructions(render_current_instructions());
             let base_instructions = self.get_prompt_base_instructions().await.text;
             let previous_model = {
                 let state = self.state.lock().await;

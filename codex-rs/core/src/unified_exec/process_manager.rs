@@ -1296,6 +1296,7 @@ impl UnifiedExecProcessManager {
     ) {
         let plugin_metrics_sidecar =
             metrics_sidecar.map(|sidecar| Arc::new(std::sync::Mutex::new(Some(sidecar))));
+        process.set_desktop_task(context.session.thread_id.to_string(), process_id, &hook_command);
         let background_hook = BackgroundHookContext {
             command: hook_command.clone(),
             environment_id: environment_id.clone(),

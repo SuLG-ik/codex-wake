@@ -51,11 +51,6 @@ impl Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: WaitArgs = parse_arguments(&arguments)?;
-        if args.until_event && args.timeout_ms.is_some() {
-            return Err(FunctionCallError::RespondToModel(
-                "Omit timeout_ms when using until_event.".to_string(),
-            ));
-        }
         let min_timeout_ms = turn.config.multi_agent_v2.min_wait_timeout_ms;
         let max_timeout_ms = turn.config.multi_agent_v2.max_wait_timeout_ms;
         let default_timeout_ms = turn.config.multi_agent_v2.default_wait_timeout_ms;
@@ -72,17 +67,6 @@ impl Handler {
 
         let (activity_rx, pending_activity) =
             subscribe_input_activity(&session, &turn.sub_id).await;
-        if args.until_event
-            && pending_activity.is_none()
-            && !turn.session_source.is_non_root_agent()
-            && turn.mode() != codex_protocol::config_types::ModeKind::Plan
-        {
-            session.arm_background_agent_mail_wait(&turn);
-            return Ok(boxed_tool_output(WaitAgentResult {
-                message: "Waiting for agent mail. Codex will resume when it arrives.".to_string(),
-                timed_out: false,
-            }));
-        }
 
         session
             .emit_turn_item_started(
@@ -103,14 +87,12 @@ impl Handler {
             .await;
 
         let wait_started = Instant::now();
-        let wait = wait_for_activity(activity_rx, pending_activity);
-        let outcome = if args.until_event {
-            wait.await
-        } else {
-            tokio::time::timeout(Duration::from_millis(timeout_ms as u64), wait)
-                .await
-                .unwrap_or(WaitOutcome::TimedOut)
-        };
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(timeout_ms as u64),
+            wait_for_activity(activity_rx, pending_activity),
+        )
+        .await
+        .unwrap_or(WaitOutcome::TimedOut);
         // A completed wait may wake for a message, user input, or its timeout.
         // Dropped waits do not have an observed outcome and are not included.
         turn.session_telemetry.record_duration(
@@ -159,8 +141,6 @@ impl CoreToolRuntime for Handler {
 #[serde(deny_unknown_fields)]
 struct WaitArgs {
     timeout_ms: Option<i64>,
-    #[serde(default)]
-    until_event: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]

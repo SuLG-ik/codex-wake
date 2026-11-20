@@ -15,6 +15,7 @@ final class DesktopApp: NSObject, NSApplicationDelegate {
     private let files = FileManager.default
     private var desktop: NSRunningApplication?
     private var menu: Process?
+    private var desktopDriver: Process?
     private var sessionDirectory: URL?
     private var monitor: Timer?
 
@@ -48,6 +49,7 @@ final class DesktopApp: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         monitor?.invalidate()
         if let menu, menu.isRunning { menu.terminate() }
+        if let desktopDriver, desktopDriver.isRunning { desktopDriver.terminate() }
         if let sessionDirectory { try? files.removeItem(at: sessionDirectory) }
     }
 
@@ -106,25 +108,43 @@ final class DesktopApp: NSObject, NSApplicationDelegate {
         try menu.run()
         self.menu = menu
 
-        let config = NSWorkspace.OpenConfiguration()
-        config.environment = ProcessInfo.processInfo.environment.merging([
+        guard let desktopBundle = Bundle(url: desktopURL),
+              let executable = desktopBundle.executableURL,
+              let bundleID = desktopBundle.bundleIdentifier else {
+            throw LauncherError(description: "ChatGPT Desktop has no executable.")
+        }
+        let driver = Process()
+        driver.executableURL = node
+        driver.arguments = [
+            runtime.appendingPathComponent("desktop-wake/desktop-driver.mjs").path,
+            executable.path,
+            sessionPath,
+        ]
+        driver.environment = ProcessInfo.processInfo.environment.merging([
             "CODEX_CLI_PATH": runtime.appendingPathComponent("desktop-wake/codex").path,
             "CODEX_APP_SERVER_FORCE_CLI": "1",
             "CODEX_WAKE_BINARY": runtime.appendingPathComponent("codex").path,
             "CODEX_WAKE_NODE": node.path,
             "CODEX_WAKE_SOCKET": sessionPath,
         ]) { _, bundledValue in bundledValue }
-        workspace.openApplication(at: desktopURL, configuration: config) { [weak self] application, error in
+        driver.terminationHandler = { [weak self] process in
+            let failed = process.terminationStatus != 0
             DispatchQueue.main.async {
-                guard let self else { return }
-                if let application {
-                    self.desktop = application
-                    self.monitor = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
-                        if application.isTerminated { timer.invalidate(); NSApp.terminate(nil) }
-                    }
+                if failed {
+                    self?.fail(LauncherError(description: "ChatGPT Desktop closed unexpectedly."))
                 } else {
-                    self.fail(error ?? LauncherError(description: "ChatGPT Desktop could not be opened."))
+                    NSApp.terminate(nil)
                 }
+            }
+        }
+        desktopDriver = driver
+        try driver.run()
+        monitor = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            if let application = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .first(where: { !$0.isTerminated }) {
+                self.desktop = application
+                timer.invalidate()
             }
         }
     }

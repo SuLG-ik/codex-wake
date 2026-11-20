@@ -34,17 +34,17 @@ session=$(mktemp -d /tmp/cxwake.XXXXXX)
 menu_pid=
 cleanup() {
     if [ -n "$menu_pid" ]; then kill "$menu_pid" 2>/dev/null || true; fi
-    rm -f "$session"/rpc-*
-    rmdir "$session"
+    rm -rf -- "$session"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 "$runtime/BackgroundMenu" "$node" "$wake_dir/bridge.mjs" "$session" "$$" &
 menu_pid=$!
-/usr/bin/open -W -a "$app" \
-    --env "CODEX_CLI_PATH=$wake_dir/codex" \
-    --env "CODEX_APP_SERVER_FORCE_CLI=1" \
-    --env "CODEX_WAKE_BINARY=$runtime/codex" \
-    --env "CODEX_WAKE_NODE=$node" \
-    --env "CODEX_WAKE_SOCKET=$session"
+desktop_executable=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Contents/Info.plist")
+CODEX_CLI_PATH="$wake_dir/codex" \
+CODEX_APP_SERVER_FORCE_CLI=1 \
+CODEX_WAKE_BINARY="$runtime/codex" \
+CODEX_WAKE_NODE="$node" \
+CODEX_WAKE_SOCKET="$session" \
+"$node" "$wake_dir/desktop-driver.mjs" "$app/Contents/MacOS/$desktop_executable" "$session"

@@ -41,7 +41,9 @@ done
 
 install -m 755 "$wake_dir/launch.sh" "$package_dir/desktop-wake/launch.sh"
 install -m 755 "$wake_dir/codex" "$package_dir/desktop-wake/codex"
-install -m 644 "$wake_dir/bridge.mjs" "$package_dir/desktop-wake/bridge.mjs"
+for script in bridge.mjs desktop-driver.mjs thread-background-ui.js; do
+    install -m 644 "$wake_dir/$script" "$package_dir/desktop-wake/$script"
+done
 install -m 644 "$repo_dir/LICENSE" "$repo_dir/NOTICE" "$package_dir/"
 install -m 644 "$wake_dir/README.md" "$package_dir/README.md"
 install -m 644 "$runtime_dir/version" "$package_dir/version"
@@ -76,8 +78,8 @@ if [ -n "$node_dist" ]; then
     <key>CFBundleIdentifier</key><string>com.sulg-ik.codex-wake</string>
     <key>CFBundleName</key><string>Codex Wake</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.3.0</string>
-    <key>CFBundleVersion</key><string>3</string>
+    <key>CFBundleShortVersionString</key><string>0.4.0</string>
+    <key>CFBundleVersion</key><string>4</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>

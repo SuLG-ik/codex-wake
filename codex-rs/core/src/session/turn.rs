@@ -579,12 +579,6 @@ pub(crate) async fn run_turn(
                     .0,
             );
         }
-        if background_input
-            .iter()
-            .any(|item| matches!(item, TurnInput::InterAgentCommunication(_)))
-        {
-            sess.clear_background_agent_mail_wait();
-        }
         let pending_input = background_input;
 
         if run_hooks_and_record_inputs(

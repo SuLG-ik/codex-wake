@@ -10,13 +10,42 @@ use super::TurnInput;
 use super::session::Session;
 use super::turn_context::TurnContext;
 
+const BACKGROUND_COMMAND_INSTRUCTIONS: &str = r#"
+
+## Waiting for long shell commands
+
+When a long-running shell command is a prerequisite for the next step and both
+`exec_command` and `write_stdin` support Wake, use the following sequence even
+if the user has not explicitly asked you to resume.
+
+- Start the command with `exec_command` and a short initial wait such as
+  `yield_time_ms: 1000`. Leave `on_exit` unset on this first call so you can see
+  whether the command is still running.
+- If the tool returns a live session ID, send a brief commentary message to the
+  user in their language. Say that the command is running and that you will pause
+  here and continue when its result arrives. Send this update after the launch
+  and before requesting the pause. If the command has already exited, proceed
+  directly with its result.
+- Call `write_stdin` for that session ID with empty `chars` and `on_exit: "wake"`.
+  This parks the current turn. There is no need to poll or ask the user to
+  send another message.
+- When the runtime delivers the result, use the output and exit status to
+  continue the original task from where you left off. Carry out any remaining
+  steps before reporting the final outcome.
+
+Honor the user's explicit preferences for a foreground wait or silent handling.
+"#;
+
+pub(super) fn with_background_command_instructions(mut instructions: String) -> String {
+    instructions.push_str(BACKGROUND_COMMAND_INSTRUCTIONS);
+    instructions
+}
+
 /// Finish foreground sampling after the current tool outputs have been recorded.
 pub(crate) struct BackgroundHandoff;
 
 /// Admit ready results in a synthetic wake after the new turn has been registered.
 pub(crate) struct ReceiveBackgroundResults;
-
-struct BackgroundAgentMailWait;
 
 #[derive(Default)]
 struct BackgroundResults {
@@ -25,26 +54,6 @@ struct BackgroundResults {
 }
 
 impl Session {
-    pub(crate) fn arm_background_agent_mail_wait(&self, turn: &TurnContext) {
-        self.services
-            .thread_extension_data
-            .insert(BackgroundAgentMailWait);
-        turn.extension_data.insert(BackgroundHandoff);
-    }
-
-    pub(crate) fn has_background_agent_mail_wait(&self) -> bool {
-        self.services
-            .thread_extension_data
-            .get::<BackgroundAgentMailWait>()
-            .is_some()
-    }
-
-    pub(crate) fn clear_background_agent_mail_wait(&self) {
-        self.services
-            .thread_extension_data
-            .remove::<BackgroundAgentMailWait>();
-    }
-
     fn background_results(&self) -> Arc<BackgroundResults> {
         self.services
             .thread_extension_data

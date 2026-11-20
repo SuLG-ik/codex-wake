@@ -1082,7 +1082,6 @@ impl CodexThread {
             .has_background_jobs()
             .await
             || self.session.has_background_results().await
-            || self.session.has_background_agent_mail_wait()
     }
 
     pub async fn move_terminal_to_background(

@@ -66,11 +66,6 @@ impl Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: WaitArgs = parse_arguments(&arguments)?;
-        if args.until_event && args.timeout_ms.is_some() {
-            return Err(FunctionCallError::RespondToModel(
-                "Omit timeout_ms when using until_event.".to_string(),
-            ));
-        }
         let receiver_thread_ids = parse_agent_id_targets(args.targets)?;
         let local_agent_control = session
             .services
@@ -185,12 +180,7 @@ impl Handler {
             let mut results = Vec::new();
             let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
             loop {
-                let update = if args.until_event {
-                    Ok(futures.next().await)
-                } else {
-                    timeout_at(deadline, futures.next()).await
-                };
-                match update {
+                match timeout_at(deadline, futures.next()).await {
                     Ok(Some(Ok(Some(result)))) => {
                         results.push(result);
                         break;
@@ -303,8 +293,6 @@ struct WaitArgs {
     #[serde(default)]
     targets: Vec<String>,
     timeout_ms: Option<i64>,
-    #[serde(default)]
-    until_event: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]

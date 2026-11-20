@@ -919,10 +919,7 @@ impl Session {
     }
 
     pub(crate) async fn should_wake_on_agent_messages(&self) -> bool {
-        if !(self.features.enabled(Feature::WakeOnAgentMessages)
-            || self.has_background_agent_mail_wait())
-            || self.is_interrupted()
-        {
+        if !self.features.enabled(Feature::WakeOnAgentMessages) || self.is_interrupted() {
             return false;
         }
 

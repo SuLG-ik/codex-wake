@@ -44,6 +44,7 @@ use crate::tools::network_approval::DeferredNetworkApproval;
 use codex_core_plugins::PluginMetricsSidecar;
 
 mod async_watcher;
+mod desktop_task;
 mod command_sessions;
 mod errors;
 mod oneshot;

@@ -3,8 +3,9 @@
 This local fork uses the open-source Codex runtime bundled with ChatGPT Desktop. The launcher selects the patched runtime with `CODEX_CLI_PATH`. A macOS menu bar control lists commands started by the connected app and lets you hand off a live command. The installed app bundle and global launcher settings are untouched.
 
 - **Move to background** releases the current shell wait and ends foreground model work at its next tool boundary. The original process keeps running. The completion event delivers its exit code and bounded output to the same thread.
-- Codex can pass `on_exit: "wake"` to `exec_command` or to an empty `write_stdin` call for an existing process. The tool descriptions explain when to use it.
-- A child agent waits for its own command inside its runtime until the result arrives. It remains running from its parent's point of view. `wait_agent(until_event: true)` waits on agent events instead of looping on a timeout. In Multi-Agent V2, a root thread becomes idle and resumes on agent mail. In V1 the tool waits for a selected child's final status in the current turn.
+- In Desktop, the latest response footer shows the running Wake command count for the open chat. Click the count to see the commands and their elapsed times.
+- When a long shell command blocks the next step, Codex starts it, reports that it is still running, and parks the chat with `on_exit: "wake"` on the existing session. The result wakes the same chat so Codex can continue the original task.
+- A child agent waits for its own command inside its runtime until the result arrives. It remains running from its parent's point of view. With the upstream `wake_on_agent_messages` feature enabled, an idle root thread resumes when agent mail arrives. The standard `wait_agent` retains its upstream timeout behavior.
 - Jobs belong to the running Codex process. Quitting the app ends that runtime and its jobs. The menu handles agent shell calls that use Unified Exec. The separate interactive Desktop terminal uses its own shell session.
 
 ## Open Codex Wake.app

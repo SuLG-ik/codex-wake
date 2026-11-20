@@ -593,10 +593,9 @@ impl Session {
             .models_manager
             .refresh_after_auth_change(self.get_config().await.http_client_factory())
             .await;
-        let session_configuration = if self.enabled(Feature::WakeOnAgentMessages)
-            || self.has_background_results().await
-            || self.has_background_agent_mail_wait()
-        {
+        let wake_on_pending_work =
+            self.enabled(Feature::WakeOnAgentMessages) || self.has_background_results().await;
+        let session_configuration = if wake_on_pending_work {
             let Some(configuration) = self.pending_work_turn_configuration(&turn_state).await
             else {
                 return;

@@ -111,6 +111,7 @@ pub(crate) struct UnifiedExecProcess {
     output_drained: Arc<Notify>,
     interaction_lock: Arc<Mutex<()>>,
     background_state: AtomicU8,
+    desktop_task: std::sync::OnceLock<super::desktop_task::DesktopTask>,
     pub(super) foreground_released: CancellationToken,
     foreground_turn: std::sync::Mutex<Option<String>>,
     state_tx: watch::Sender<ProcessState>,
@@ -160,6 +161,7 @@ impl UnifiedExecProcess {
             output_drained,
             interaction_lock: Arc::new(Mutex::new(())),
             background_state: AtomicU8::new(BACKGROUND_UNREGISTERED),
+            desktop_task: std::sync::OnceLock::new(),
             foreground_released: CancellationToken::new(),
             foreground_turn: std::sync::Mutex::new(None),
             state_tx,
@@ -201,6 +203,18 @@ impl UnifiedExecProcess {
         &self.output
     }
 
+    pub(super) fn set_desktop_task(&self, thread_id: String, process_id: i32, command: &str) {
+        if let Some(task) = super::desktop_task::DesktopTask::new(thread_id, process_id, command) {
+            let _ = self.desktop_task.set(task);
+        }
+    }
+
+    fn clear_desktop_task(&self) {
+        if let Some(task) = self.desktop_task.get() {
+            task.clear();
+        }
+    }
+
     pub(super) fn background(&self, turn: Option<&TurnContext>) -> bool {
         if self.has_exited()
             || self
@@ -218,29 +232,43 @@ impl UnifiedExecProcess {
         if let Some(turn) = turn {
             turn.extension_data.insert(BackgroundHandoff);
         }
+        if let Some(task) = self.desktop_task.get() {
+            task.publish_if(|| {
+                self.background_state.load(Ordering::Acquire) == BACKGROUND_ARMED
+                    && !self.has_exited()
+            });
+        }
         self.foreground_released.cancel();
         true
     }
 
     pub(super) fn claim_background_completion(&self) -> bool {
-        self.background_state
+        let claimed = self.background_state
             .try_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
                 BACKGROUND_UNREGISTERED => Some(BACKGROUND_SETTLED),
                 BACKGROUND_ARMED => Some(BACKGROUND_DELIVERING),
                 _ => None,
             })
-            .is_ok_and(|previous| previous == BACKGROUND_ARMED)
+            .is_ok_and(|previous| previous == BACKGROUND_ARMED);
+        if claimed {
+            self.clear_desktop_task();
+        }
+        claimed
     }
 
     pub(super) fn claim_background_read(&self) -> bool {
-        self.background_state
+        let claimed = self.background_state
             .compare_exchange(
                 BACKGROUND_ARMED,
                 BACKGROUND_SETTLED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
-            .is_ok()
+            .is_ok();
+        if claimed {
+            self.clear_desktop_task();
+        }
+        claimed
     }
 
     pub(super) fn foreground_wait(&self, turn: &TurnContext) -> impl Drop + '_ {
@@ -262,6 +290,7 @@ impl UnifiedExecProcess {
     pub(super) fn discard_background_completion(&self) {
         self.background_state
             .store(BACKGROUND_SETTLED, Ordering::Release);
+        self.clear_desktop_task();
     }
 
     pub(super) fn background_completion_pending(&self) -> bool {
