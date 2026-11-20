@@ -2,7 +2,7 @@
 
 An unofficial Codex fork with event-driven background execution. Send a running command to the background from the macOS menu bar, or let Codex wait for it and resume the same chat on exit without model polling.
 
-[Download the macOS Apple Silicon build](https://github.com/SuLG-ik/codex-wake/releases) · [Run, build, and update Codex Wake](desktop-wake/README.md)
+[Download Codex Wake.app for Apple Silicon](https://github.com/SuLG-ik/codex-wake/releases) · [Run, build, and update Codex Wake](desktop-wake/README.md)
 
 ---
 

@@ -7,18 +7,13 @@ This local fork uses the open-source Codex runtime bundled with ChatGPT Desktop.
 - A child agent waits for its own command inside its runtime until the result arrives. It remains running from its parent's point of view. `wait_agent(until_event: true)` waits on agent events instead of looping on a timeout. In Multi-Agent V2, a root thread becomes idle and resumes on agent mail. In V1 the tool waits for a selected child's final status in the current turn.
 - Jobs belong to the running Codex process. Quitting the app ends that runtime and its jobs. The menu handles agent shell calls that use Unified Exec. The separate interactive Desktop terminal uses its own shell session.
 
-## Run the release
+## Open Codex Wake.app
 
-Download `codex-wake-macos-arm64.tar.gz` from [GitHub Releases](https://github.com/SuLG-ik/codex-wake/releases) on an Apple Silicon Mac. The release provides a SHA-256 checksum and uses ad-hoc signing. Extract the archive and open a terminal in the extracted `codex-wake-macos-arm64` directory.
+Download `codex-wake-macos-arm64-app.zip` from [GitHub Releases](https://github.com/SuLG-ik/codex-wake/releases) on an Apple Silicon Mac. Extract the ZIP and open **Codex Wake.app** in Finder. It starts the installed ChatGPT Desktop app with the patched runtime and adds the background command menu to the macOS menu bar. The launcher offers to quit ChatGPT first if it is already open.
 
-```sh
-./codex --version
-./codex
-```
+This app build pairs with ChatGPT Desktop that bundles `codex-cli 0.169.0-alpha.11.1`. The app checks the bundled version before it opens Desktop. Node.js and the runtime helpers are included. The release uses ad-hoc signing and includes a SHA-256 checksum.
 
-Sign in on that Mac when prompted. The terminal build includes its runtime helpers and works independently of the installed Desktop version.
-
-For the Desktop menu, install Node.js and use a ChatGPT Desktop build with bundled `codex-cli 0.169.0-alpha.11.1`. Quit ChatGPT Desktop, then run `./launch-desktop.command`. The patched runtime and its Desktop bridge were tested together with local mock-model workflows. A full launch in the Desktop GUI remains unverified.
+The patched terminal CLI is also available inside the app at `Codex Wake.app/Contents/Resources/runtime/codex`.
 
 ## Build and launch from source
 
@@ -33,7 +28,7 @@ Run the launcher after quitting existing ChatGPT windows and the app itself. The
 
 An external Codex runtime can affect signature-dependent features such as Computer Use or browser integration. See [openai/codex#34583](https://github.com/openai/codex/issues/34583).
 
-To create a portable release archive, run `./desktop-wake/package-macos.sh RUNTIME_DIR SIDECAR_DIR OUTPUT_DIR`. Verify the asset digests and extract the matching `codex-exec-server` and `codex-code-mode-host` binaries from the [official CLI release](https://github.com/openai/codex/releases/tag/rust-v0.169.0-alpha.11.1) into `SIDECAR_DIR`.
+To create the Finder app release, run `./desktop-wake/package-macos.sh RUNTIME_DIR SIDECAR_DIR OUTPUT_DIR NODE_DIST_DIR`. Verify the asset digests and extract the matching `codex-exec-server` and `codex-code-mode-host` binaries from the [official CLI release](https://github.com/openai/codex/releases/tag/rust-v0.169.0-alpha.11.1) into `SIDECAR_DIR`. Use an extracted [official Node.js distribution](https://nodejs.org/dist/) with `bin/node` and `LICENSE` for `NODE_DIST_DIR`. Omitting that last argument builds the terminal archive.
 
 ## Updates
 
