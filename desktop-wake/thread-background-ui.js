@@ -8,6 +8,7 @@
     .wake-inline-status { display: inline-flex; align-items: center; gap: .35rem;
       margin-inline-start: .3rem; color: var(--color-text-secondary, inherit);
       font: inherit; white-space: nowrap; }
+    .wake-inline-separator { margin-inline-end: .3rem; }
     .wake-inline-status button { border: 0; background: transparent; color: inherit;
       cursor: pointer; font: inherit; padding: 0 2px; border-radius: 3px; }
     .wake-inline-status button:hover { text-decoration: underline; }
@@ -22,21 +23,38 @@
     #wake-background-popover ul { list-style: none; margin: 0; padding: 0; }
     #wake-background-popover li { display: grid; grid-template-columns: minmax(0, 1fr) auto;
       gap: 12px; padding: 8px 0; border-top: 1px solid light-dark(#eee, #3d3d3d); }
-    #wake-background-popover code { overflow-wrap: anywhere; white-space: pre-wrap; }
-    #wake-background-popover time { opacity: .75; white-space: nowrap; }
+    #wake-background-popover code { display: -webkit-box; -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
+    #wake-background-popover code[data-expanded] { display: block; -webkit-line-clamp: unset;
+      max-height: 12rem; overflow: auto; }
+    .wake-task-actions { display: flex; align-items: flex-start; gap: 6px; }
+    #wake-background-popover time { opacity: .75; padding-block: 3px; white-space: nowrap; }
+    .wake-task-expand, .wake-task-stop { border: 0; border-radius: 5px; color: inherit;
+      background: transparent; font: inherit; cursor: pointer; }
+    .wake-task-expand { display: block; margin-top: 4px; padding: 0; font-size: 11px;
+      text-decoration: underline; text-underline-offset: 2px; }
+    .wake-task-expand[hidden] { display: none; }
+    .wake-task-stop { display: grid; place-items: center; width: 24px; height: 24px; }
+    .wake-task-stop::before { content: ""; width: 8px; height: 8px; border-radius: 1.5px;
+      background: currentColor; }
+    .wake-task-stop:hover { background: light-dark(#0001, #fff2); }
+    .wake-task-expand:focus-visible, .wake-task-stop:focus-visible { outline: 2px solid currentColor; }
+    .wake-task-stop:disabled { opacity: .4; cursor: wait; }
+    .wake-task-status { margin: 4px 0 0; font-size: 11px; }
   `);
   document.adoptedStyleSheets = [...document.adoptedStyleSheets, stylesheet];
 
   const wrap = document.createElement("span");
   wrap.className = "wake-inline-status";
   const separator = document.createElement("span");
+  separator.className = "wake-inline-separator";
   separator.textContent = "·";
   separator.setAttribute("aria-hidden", "true");
   const trigger = document.createElement("button");
   trigger.type = "button";
   trigger.setAttribute("aria-controls", "wake-background-popover");
   trigger.setAttribute("aria-expanded", "false");
-  wrap.append(separator, trigger);
+  wrap.append(trigger);
   const fallback = document.createElement("div");
   fallback.style.paddingBlock = "4px";
   fallback.style.fontSize = "12px";
@@ -56,6 +74,7 @@
   let displayedThread = null;
   let entries = new Map();
   let pendingLayout = false;
+  const stopRequests = new Map();
 
   const composerSelector = "[data-above-composer-conversation-id]";
   const activeThreadSelector = '[data-app-action-sidebar-thread-kind="local"][data-app-action-sidebar-thread-active="true"][data-app-action-sidebar-thread-id]';
@@ -77,12 +96,13 @@
   function currentThread() {
     const selected = document.querySelector(activeThreadSelector);
     const selectedThread = threadFromKey(selected?.getAttribute("data-app-action-sidebar-thread-id"));
-    const composers = visibleComposers();
-    if (selectedThread && (composers.length === 0 || composers.some((element) =>
-      threadFromKey(element.getAttribute("data-above-composer-conversation-id")) === selectedThread,
-    ))) return selectedThread;
-    if (composers.length === 1 && !selectedThread) {
-      return threadFromKey(composers[0].getAttribute("data-above-composer-conversation-id"));
+    const composerThreads = new Set(visibleComposers().map((element) =>
+      threadFromKey(element.getAttribute("data-above-composer-conversation-id")),
+    ).filter(Boolean));
+    // The conversation can mount before Desktop updates its sidebar selection.
+    if (composerThreads.size === 1) return composerThreads.values().next().value;
+    if (selectedThread && (composerThreads.size === 0 || composerThreads.has(selectedThread))) {
+      return selectedThread;
     }
     const match = route.exec(location.pathname) || route.exec(location.hash.slice(1));
     return match ? match[1].toLowerCase() : null;
@@ -131,19 +151,22 @@
     if (!stamp && !transcript) {
       if (popup.matches(":popover-open")) popup.hidePopover();
       wrap.remove();
+      separator.remove();
       fallback.remove();
       return;
     }
-    if (separator.hidden !== !stamp) separator.hidden = !stamp;
     if (stamp) {
-      if (stamp.nextElementSibling !== wrap) {
-        const style = getComputedStyle(stamp.firstElementChild ?? stamp);
+      if (stamp.previousElementSibling !== wrap) {
+        const style = getComputedStyle(stamp.lastElementChild ?? stamp);
         wrap.style.color = style.color;
         wrap.style.fontSize = style.fontSize;
-        stamp.after(wrap);
+        stamp.before(wrap);
       }
+      // The separator follows the same hover opacity as the native timestamp.
+      if (separator.parentElement !== stamp) stamp.prepend(separator);
       fallback.remove();
     } else if (fallback.parentElement !== transcript || !fallback.contains(wrap)) {
+      separator.remove();
       wrap.style.removeProperty("color");
       wrap.style.removeProperty("font-size");
       fallback.append(wrap);
@@ -168,6 +191,73 @@
     }
   }
 
+  function updateExpandButtons() {
+    if (!popup.matches(":popover-open")) return;
+    for (const { command, expand } of entries.values()) {
+      expand.hidden = !command.hasAttribute("data-expanded") &&
+        command.scrollHeight <= command.clientHeight + 1;
+    }
+  }
+
+  function stopFailed(id) {
+    const entry = entries.get(id);
+    if (!entry?.stop.disabled) return;
+    clearTimeout(entry.stopTimeout);
+    entry.stop.disabled = false;
+    entry.status.textContent = "Не удалось остановить команду";
+    entry.status.hidden = false;
+  }
+
+  function createEntry(task, thread) {
+    const row = document.createElement("li");
+    const body = document.createElement("div");
+    const command = document.createElement("code");
+    command.textContent = task.command || "Команда";
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.className = "wake-task-expand";
+    expand.textContent = "Показать полностью";
+    expand.setAttribute("aria-expanded", "false");
+    expand.hidden = true;
+    expand.addEventListener("click", () => {
+      const expanded = command.toggleAttribute("data-expanded");
+      expand.setAttribute("aria-expanded", String(expanded));
+      expand.textContent = expanded ? "Свернуть" : "Показать полностью";
+      positionPopup();
+    });
+    const status = document.createElement("p");
+    status.className = "wake-task-status";
+    status.setAttribute("role", "status");
+    status.hidden = true;
+    body.append(command, expand, status);
+    const actions = document.createElement("div");
+    actions.className = "wake-task-actions";
+    const time = document.createElement("time");
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "wake-task-stop";
+    stop.title = "Остановить команду";
+    stop.setAttribute("aria-label", stop.title);
+    actions.append(time, stop);
+    row.append(body, actions);
+    const entry = { row, task, time, command, expand, stop, status };
+    stop.addEventListener("click", () => {
+      if (currentThread() !== thread) return;
+      stop.disabled = true;
+      status.textContent = "Остановка…";
+      status.hidden = false;
+      stopRequests.set(task.id, { id: task.id, thread });
+      entry.stopTimeout = setTimeout(() => stopFailed(task.id), 5000);
+    });
+    return entry;
+  }
+
+  function readState() {
+    const requests = [...stopRequests.values()];
+    stopRequests.clear();
+    return { thread: currentThread(), requests };
+  }
+
   function setTasks(thread, nextTasks) {
     if (thread !== currentThread()) return;
     if (thread !== displayedThread && popup.matches(":popover-open")) popup.hidePopover();
@@ -182,36 +272,35 @@
 
     const nextEntries = new Map();
     for (const task of tasks) {
-      let entry = entries.get(task.id);
-      if (!entry) {
-        const row = document.createElement("li");
-        const command = document.createElement("code");
-        command.textContent = task.command || "Команда";
-        const time = document.createElement("time");
-        row.append(command, time);
-        entry = { row, task, time };
-      }
-      nextEntries.set(task.id, entry);
+      nextEntries.set(task.id, entries.get(task.id) ?? createEntry(task, thread));
     }
     list.replaceChildren(...[...nextEntries.values()].map((entry) => entry.row));
+    for (const [id, entry] of entries) {
+      if (!nextEntries.has(id)) clearTimeout(entry.stopTimeout);
+    }
     entries = nextEntries;
     updateElapsed();
     layout();
+    updateExpandButtons();
   }
 
   trigger.addEventListener("click", () => {
     popup.togglePopover();
+    updateExpandButtons();
     positionPopup();
   });
   popup.addEventListener("toggle", () => {
     trigger.setAttribute("aria-expanded", String(popup.matches(":popover-open")));
   });
-  addEventListener("resize", scheduleLayout);
+  addEventListener("resize", () => {
+    scheduleLayout();
+    updateExpandButtons();
+  });
   addEventListener("scroll", positionPopup, true);
   new MutationObserver(scheduleLayout).observe(document.documentElement, {
     childList: true, subtree: true, attributes: true, attributeFilter: attributes,
   });
   setInterval(updateElapsed, 1000);
 
-  globalThis.codexWakeBackground = Object.freeze({ currentThread, setTasks });
+  globalThis.codexWakeBackground = Object.freeze({ readState, setTasks, stopFailed });
 })();

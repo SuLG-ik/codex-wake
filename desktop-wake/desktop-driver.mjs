@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { open, readFile, readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -76,6 +76,27 @@ export async function readWakeTasks(directory) {
   return tasks.sort((first, second) => first.startedAtMs - second.startedAtMs || first.id.localeCompare(second.id));
 }
 
+async function requestTaskStop(directory, id) {
+  const taskPath = join(directory, id);
+  const stopPath = taskPath + ".stop";
+  try {
+    await stat(taskPath);
+    const marker = await open(stopPath, "wx", 0o600);
+    await marker.close();
+    // A naturally completed task may disappear while writing the stop marker.
+    try {
+      await stat(taskPath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      await unlink(stopPath).catch((cleanupError) => {
+        if (cleanupError.code !== "ENOENT") throw cleanupError;
+      });
+    }
+  } catch (error) {
+    if (!["EEXIST", "ENOENT"].includes(error.code)) throw error;
+  }
+}
+
 function isDesktopPage(target) {
   if (target.type !== "page") return false;
   try {
@@ -139,13 +160,23 @@ export class WakeDesktopUi {
           this.#windows.set(targetId, window);
         }
         await this.#ensureContext(window);
-        const thread = await this.#evaluate(window, "globalThis.codexWakeBackground.currentThread()");
+        const { thread, requests } = await this.#evaluate(window, "globalThis.codexWakeBackground.readState()");
+        for (const request of requests) {
+          if (window.visibleTasks?.get(request.id) !== request.thread ||
+              !tasks.some((task) => task.id === request.id && task.threadId === request.thread)) continue;
+          try {
+            await requestTaskStop(this.directory, request.id);
+          } catch {
+            await this.#evaluate(window, `globalThis.codexWakeBackground.stopFailed(${JSON.stringify(request.id)})`);
+          }
+        }
         if (thread !== null && !threadIdPattern.test(thread)) continue;
         const relevant = tasks.filter((task) => task.threadId === thread);
         const payload = JSON.stringify([thread, relevant]);
         if (window.snapshot !== payload) {
           await this.#evaluate(window, `globalThis.codexWakeBackground.setTasks(...${payload})`);
           window.snapshot = payload;
+          window.visibleTasks = new Map(relevant.map((task) => [task.id, thread]));
         }
       } catch (error) {
         if (/session (?:with given id )?not found|target closed/i.test(error.message)) {
@@ -154,6 +185,7 @@ export class WakeDesktopUi {
           // Reloads replace the isolated world but retain the target and session.
           window.contextId = null;
           window.snapshot = null;
+          window.visibleTasks = null;
         }
       }
     }

@@ -27,14 +27,13 @@ package_dir="$scratch/$archive_name"
 mkdir -p "$package_dir/desktop-wake" "$output_dir"
 
 install -m 755 "$runtime_dir/codex" "$package_dir/codex"
-install -m 755 "$runtime_dir/BackgroundMenu" "$package_dir/BackgroundMenu"
 for helper in codex-exec-server codex-code-mode-host; do
     install -m 755 "$sidecar_dir/$helper" "$package_dir/$helper"
     if ! codesign --verify "$package_dir/$helper" 2>/dev/null; then
         codesign --force --sign - "$package_dir/$helper"
     fi
 done
-for executable in BackgroundMenu codex-exec-server codex-code-mode-host; do
+for executable in codex-exec-server codex-code-mode-host; do
     test "$(lipo -archs "$package_dir/$executable")" = "$arch"
     codesign --verify "$package_dir/$executable"
 done
@@ -69,6 +68,10 @@ if [ -n "$node_dist" ]; then
     cp "$wake_dir/DesktopApp.swift" "$scratch/DesktopApp.swift"
     xcrun swiftc -target "$arch-apple-macosx13.0" -module-cache-path "$scratch/swift-cache" \
         "$scratch/DesktopApp.swift" -o "$app_dir/Contents/MacOS/CodexWake"
+    cp "$wake_dir/WakeIcon.swift" "$scratch/WakeIcon.swift"
+    xcrun swift -module-cache-path "$scratch/swift-cache" \
+        "$scratch/WakeIcon.swift" "$scratch/WakeIcon.iconset"
+    iconutil -c icns "$scratch/WakeIcon.iconset" -o "$resources/WakeIcon.icns"
     cat > "$app_dir/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -78,10 +81,10 @@ if [ -n "$node_dist" ]; then
     <key>CFBundleIdentifier</key><string>com.sulg-ik.codex-wake</string>
     <key>CFBundleName</key><string>Codex Wake</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.4.0</string>
-    <key>CFBundleVersion</key><string>4</string>
+    <key>CFBundleShortVersionString</key><string>0.5.0</string>
+    <key>CFBundleVersion</key><string>5</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
-    <key>LSUIElement</key><true/>
+    <key>CFBundleIconFile</key><string>WakeIcon.icns</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 EOF

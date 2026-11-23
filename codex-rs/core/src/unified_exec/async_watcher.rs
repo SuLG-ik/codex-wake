@@ -192,7 +192,11 @@ pub(super) fn spawn_exit_watcher(
     let interaction_lock = process.interaction_lock();
 
     tokio::spawn(async move {
-        exit_token.cancelled().await;
+        let stopped_by_user = tokio::select! {
+            biased;
+            _ = exit_token.cancelled() => false,
+            () = process.stop_requested_from_desktop() => true,
+        };
         output_drained.notified().await;
         // Deferred network denial deliberately remains observable for a short
         // window after process exit. Do not classify the terminal event until
@@ -295,8 +299,13 @@ pub(super) fn spawn_exit_watcher(
                         .unwrap_or_else(|| "PostToolUse hook blocked the tool result".to_string());
                 }
             }
+            let outcome = if stopped_by_user {
+                "was stopped by the user"
+            } else {
+                "finished"
+            };
             session_ref.publish_background_result(format!(
-                "Background command session {process_id} finished after {:.2}s.\nExit code: {exit_code}\nOutput:\n{output}",
+                "Background command session {process_id} {outcome} after {:.2}s.\nExit code: {exit_code}\nOutput:\n{output}",
                 duration.as_secs_f64(),
             )).await;
             process.discard_background_completion();

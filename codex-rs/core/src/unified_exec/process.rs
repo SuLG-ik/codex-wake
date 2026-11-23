@@ -293,6 +293,23 @@ impl UnifiedExecProcess {
         self.clear_desktop_task();
     }
 
+    pub(super) async fn stop_requested_from_desktop(&self) {
+        let Some(task) = self.desktop_task.get() else {
+            return std::future::pending().await;
+        };
+        self.foreground_released.cancelled().await;
+        while self.background_state.load(Ordering::Acquire) == BACKGROUND_ARMED && !self.has_exited() {
+            if task.take_stop_request() {
+                match self.terminate_confirmed().await {
+                    Ok(()) => return,
+                    Err(error) => tracing::debug!(%error, "could not stop Wake command"),
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        std::future::pending().await
+    }
+
     pub(super) fn background_completion_pending(&self) -> bool {
         matches!(
             self.background_state.load(Ordering::Acquire),

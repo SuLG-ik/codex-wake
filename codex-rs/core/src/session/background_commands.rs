@@ -33,7 +33,9 @@ if the user has not explicitly asked you to resume.
   continue the original task from where you left off. Carry out any remaining
   steps before reporting the final outcome.
 
-Honor the user's explicit preferences for a foreground wait or silent handling.
+If the user stopped a background command, acknowledge the stop and do not restart
+it without their permission. Honor explicit preferences for a foreground wait or
+silent handling.
 "#;
 
 pub(super) fn with_background_command_instructions(mut instructions: String) -> String {

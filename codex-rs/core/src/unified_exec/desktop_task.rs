@@ -39,7 +39,7 @@ impl DesktopTask {
             details: TaskDetails {
                 thread_id,
                 process_id,
-                command: command.chars().take(512).collect(),
+                command: command.to_owned(),
                 server_pid,
                 started_at_ms,
             },
@@ -68,10 +68,19 @@ impl DesktopTask {
         }
     }
 
+    fn stop_path(&self) -> PathBuf {
+        self.path.with_extension("json.stop")
+    }
+
+    pub(super) fn take_stop_request(&self) -> bool {
+        std::fs::remove_file(self.stop_path()).is_ok()
+    }
+
     pub(super) fn clear(&self) {
         let mut published = self.published.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *published {
             let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(self.stop_path());
             *published = false;
         }
     }

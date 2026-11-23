@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 private struct RuntimePackage: Decodable {
     let version: String
@@ -14,7 +15,6 @@ final class DesktopApp: NSObject, NSApplicationDelegate {
     private let workspace = NSWorkspace.shared
     private let files = FileManager.default
     private var desktop: NSRunningApplication?
-    private var menu: Process?
     private var desktopDriver: Process?
     private var sessionDirectory: URL?
     private var monitor: Timer?
@@ -42,13 +42,16 @@ final class DesktopApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        desktop?.activate(options: [.activateIgnoringOtherApps])
+        if let url = desktop?.bundleURL {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            workspace.openApplication(at: url, configuration: configuration, completionHandler: nil)
+        }
         return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor?.invalidate()
-        if let menu, menu.isRunning { menu.terminate() }
         if let desktopDriver, desktopDriver.isRunning { desktopDriver.terminate() }
         if let sessionDirectory { try? files.removeItem(at: sessionDirectory) }
     }
@@ -100,14 +103,6 @@ final class DesktopApp: NSObject, NSApplicationDelegate {
         let sessionPath = String(cString: session)
         sessionDirectory = URL(fileURLWithPath: sessionPath, isDirectory: true)
         let node = resources.appendingPathComponent("node/bin/node")
-        let bridge = runtime.appendingPathComponent("desktop-wake/bridge.mjs")
-
-        let menu = Process()
-        menu.executableURL = runtime.appendingPathComponent("BackgroundMenu")
-        menu.arguments = [node.path, bridge.path, sessionPath, String(ProcessInfo.processInfo.processIdentifier)]
-        try menu.run()
-        self.menu = menu
-
         guard let desktopBundle = Bundle(url: desktopURL),
               let executable = desktopBundle.executableURL,
               let bundleID = desktopBundle.bundleIdentifier else {
@@ -149,6 +144,29 @@ final class DesktopApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        let shortcut = NSMenuItem(title: "Create Finder Alias…", action: #selector(saveAlias), keyEquivalent: "")
+        shortcut.target = self
+        menu.addItem(shortcut)
+        return menu
+    }
+
+    @objc private func saveAlias() {
+        let panel = NSSavePanel()
+        panel.title = "Create Codex Wake Finder Alias"
+        panel.allowedContentTypes = [.aliasFile]
+        panel.nameFieldStringValue = "Codex Wake.alias"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            try createFinderAlias(at: destination)
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.runModal()
+        }
+    }
+
     private func fail(_ error: Error) {
         let alert = NSAlert()
         alert.messageText = "Codex Wake could not start"
@@ -168,8 +186,42 @@ final class DesktopApp: NSObject, NSApplicationDelegate {
     }
 }
 
+private func createFinderAlias(at destination: URL) throws {
+    let files = FileManager.default
+    let target = Bundle.main.bundleURL
+    guard target.pathExtension == "app", destination.pathExtension.lowercased() == "alias" else {
+        throw LauncherError(description: "Choose a destination ending in .alias.")
+    }
+    let options: URL.BookmarkCreationOptions = [.suitableForBookmarkFile, .withoutImplicitSecurityScope]
+    let bookmark = try target.bookmarkData(options: options, includingResourceValuesForKeys: nil, relativeTo: nil)
+    let temporary = try files.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                  appropriateFor: destination.deletingLastPathComponent(), create: true)
+    defer { try? files.removeItem(at: temporary) }
+    var alias = temporary.appendingPathComponent("Codex Wake.alias")
+    try URL.writeBookmarkData(bookmark, to: alias)
+    var properties = URLResourceValues()
+    properties.hasHiddenExtension = true
+    try alias.setResourceValues(properties)
+    let resolved = try URL(resolvingAliasFileAt: alias, options: [.withoutUI, .withoutMounting])
+    guard resolved.resolvingSymlinksInPath().path == target.resolvingSymlinksInPath().path else {
+        throw LauncherError(description: "Finder alias resolved to a different application.")
+    }
+    try files.moveItem(at: alias, to: destination)
+}
+
+let arguments = CommandLine.arguments
+if arguments.count == 3, arguments[1] == "--create-alias" {
+    do {
+        try createFinderAlias(at: URL(fileURLWithPath: arguments[2]))
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+        exit(1)
+    }
+}
+
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(.regular)
 let delegate = DesktopApp()
 app.delegate = delegate
 app.run()
